@@ -1,7 +1,7 @@
-
 from langchain_core.prompts import ChatPromptTemplate
 
 from agents.policy_agent.schemas import PolicyExtractionResult
+from agents.policy_agent.verification import ExtractionReport, split_verified
 from llm.langchain_model import get_langchain_model
 
 
@@ -49,13 +49,13 @@ class PolicyExtractionAgent:
 
         self.chain = self.prompt | self.structured_model
 
-    def extract(
+    def extract_with_report(
         self,
         *,
         document_text: str,
         source: str,
-    ) -> PolicyExtractionResult:
-        """Extract privacy-related claims from a policy document."""
+    ) -> ExtractionReport:
+        """Extract claims, keeping only those whose evidence is real text."""
 
         if not document_text or not document_text.strip():
             raise ValueError("Policy document text cannot be empty.")
@@ -63,11 +63,30 @@ class PolicyExtractionAgent:
         if not source or not source.strip():
             raise ValueError("Source identifier cannot be empty.")
 
-        result = self.chain.invoke(
+        raw = self.chain.invoke(
             {
                 "source": source,
                 "document_text": document_text,
             }
         )
+        result = PolicyExtractionResult.model_validate(raw)
 
-        return PolicyExtractionResult.model_validate(result)
+        verified, rejected = split_verified(result.claims, document_text)
+
+        return ExtractionReport(
+            result=PolicyExtractionResult(claims=verified),
+            rejected_claims=rejected,
+        )
+
+    def extract(
+        self,
+        *,
+        document_text: str,
+        source: str,
+    ) -> PolicyExtractionResult:
+        """Extract privacy claims, returning only verified ones."""
+
+        return self.extract_with_report(
+            document_text=document_text,
+            source=source,
+        ).result
