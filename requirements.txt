@@ -2,3 +2,6 @@ groq
 pydantic
 python-dotenv
 pytest
+jsonschema
+langchain
+langchain-groq

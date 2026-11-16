@@ -1,0 +1,78 @@
+{
+  "source": "hard_privacy_policy.txt",
+  "claims": [
+    {
+      "claim": "We collect email address, display name, optional phone number, device identifiers and IP addresses.",
+      "category": "transparency_notice",
+      "evidence": "When you register, we collect your email address, display name and, if you choose to provide it, your phone number. We also collect device identifiers and IP addresses automatically when you use the app.",
+      "source": "hard_privacy_policy.txt"
+    },
+    {
+      "claim": "We use personal information to operate the service and send product updates, and we do not use it for advertising or sell it.",
+      "category": "purpose_limitation",
+      "evidence": "We use your information to operate the service and to send you product updates. We do not use your information for advertising, and we do not sell it to anyone.",
+      "source": "hard_privacy_policy.txt"
+    },
+    {
+      "claim": "We obtain consent before sending marketing emails and allow withdrawal via unsubscribe link or written request.",
+      "category": "consent",
+      "evidence": "We ask for your consent before sending marketing emails. You may withdraw consent at any time by using the unsubscribe link or by writing to us.",
+      "source": "hard_privacy_policy.txt"
+    },
+    {
+      "claim": "Account data is retained for two years after last login, and backups are deleted within 90 days of account deletion.",
+      "category": "storage_retention",
+      "evidence": "We keep account data for two years after your last login, unless the law requires us to keep it longer. Backups are deleted within 90 days of account deletion.",
+      "source": "hard_privacy_policy.txt"
+    },
+    {
+      "claim": "We share limited data with our cloud hosting provider, which acts as a data processor under a written agreement.",
+      "category": "data_sharing",
+      "evidence": "We share limited data with our cloud hosting provider, who acts as our data processor under a written agreement.",
+      "source": "hard_privacy_policy.txt"
+    },
+    {
+      "claim": "We do not transfer personal data outside India.",
+      "category": "cross_border_transfer",
+      "evidence": "We do not transfer personal data outside India.",
+      "source": "hard_privacy_policy.txt"
+    },
+    {
+      "claim": "Users can request access, correction, or erasure of their personal data via email and we respond within 30 days.",
+      "category": "data_principal_rights",
+      "evidence": "You can request access to, correction of, or erasure of your personal data by emailing privacy@acmenotes.example. We respond to requests within 30 days.",
+      "source": "hard_privacy_policy.txt"
+    },
+    {
+      "claim": "The service is not intended for persons under 18 and we do not knowingly collect data from children.",
+      "category": "children_data",
+      "evidence": "Our service is not intended for anyone under 18, and we do not knowingly collect data from children.",
+      "source": "hard_privacy_policy.txt"
+    },
+    {
+      "claim": "Personal data is encrypted at rest and in transit.",
+      "category": "security_safeguards",
+      "evidence": "We encrypt personal data at rest and in transit.",
+      "source": "hard_privacy_policy.txt"
+    },
+    {
+      "claim": "In the event of a personal data breach, we will notify affected users and the Data Protection Board without undue delay.",
+      "category": "data_breach",
+      "evidence": "If a personal data breach occurs, we will notify affected users and the Data Protection Board without undue delay.",
+      "source": "hard_privacy_policy.txt"
+    },
+    {
+      "claim": "We conduct a data protection impact assessment once a year.",
+      "category": "other",
+      "evidence": "We conduct a data protection impact assessment once a year.",
+      "source": "hard_privacy_policy.txt"
+    },
+    {
+      "claim": "Our grievance officer will resolve complaints within 15 days.",
+      "category": "grievance_redressal",
+      "evidence": "Our grievance officer, reachable at grievance@acmenotes.example, will resolve complaints within 15 days.",
+      "source": "hard_privacy_policy.txt"
+    }
+  ],
+  "rejected_claims": []
+}
