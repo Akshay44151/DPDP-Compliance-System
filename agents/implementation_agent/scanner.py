@@ -105,6 +105,8 @@ class _Visitor(ast.NodeVisitor):
         if tk & CONSENT:
             self.emit("consent_logic", node, name=node.name, role="function")
         names, writes, mails = set(), [], []
+        deletes, period_days, cutoff_filters = False, None, []
+        write_fields, subjects = [], []
         for n in ast.walk(node):
             if isinstance(n, ast.Name):
                 names |= tokens(n.id)
@@ -114,13 +116,30 @@ class _Visitor(ast.NodeVisitor):
                 last = dotted(n.func).split(".")[-1]
                 if isinstance(n.func, ast.Attribute) and n.func.attr in WRITE_CALLS:
                     writes.append(n.func.attr)
+                    write_fields += [k.arg for k in n.keywords if k.arg]
                 if last in MAIL_CALLS:
                     mails.append(last)
+                    cands = n.args[:1] + [k.value for k in n.keywords if k.arg == "subject"]
+                    subjects += [c.value for c in cands
+                                 if isinstance(c, ast.Constant) and isinstance(c.value, str)]
+                if last == "delete" and isinstance(n.func, ast.Attribute):
+                    deletes = True
+                if last == "timedelta":
+                    days = sum(k.value.value * (7 if k.arg == "weeks" else 1) for k in n.keywords
+                               if k.arg in ("days", "weeks") and isinstance(k.value, ast.Constant)
+                               and isinstance(k.value.value, (int, float)))
+                    period_days = int(days) if days else period_days
+                cutoff_filters += [k.arg for k in n.keywords if k.arg and re.search(r"__lte?$", k.arg)]
         refs = dict(references_consent=bool(names & CONSENT), references_purpose=bool(names & PURPOSE))
         if writes:
-            self.emit("data_write", node, function=node.name, calls=sorted(set(writes)), **refs)
+            self.emit("data_write", node, function=node.name, calls=sorted(set(writes)),
+                      fields=list(dict.fromkeys(write_fields)), **refs)
+        if deletes:  # code that deletes records: keep the cutoff period and the field it filters on
+            self.emit("retention_logic", node, name=node.name, role="deletion_code",
+                      period_days=period_days, cutoff_filters=sorted(set(cutoff_filters)))
         if mails:
-            self.emit("outbound_email", node, function=node.name, calls=sorted(set(mails)), **refs)
+            self.emit("outbound_email", node, function=node.name, calls=sorted(set(mails)),
+                      subjects=list(dict.fromkeys(subjects)), **refs)
         self.generic_visit(node)
 
     visit_FunctionDef = _func
@@ -130,7 +149,10 @@ class _Visitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call):
         name = dotted(node.func)
         if name in SHARING_CALLS:
-            self.emit("data_sharing", node, call=name)
+            url = node.args[0] if node.args else next(
+                (k.value for k in node.keywords if k.arg == "url"), None)
+            self.emit("data_sharing", node, call=name,
+                      target=ast.unparse(url)[:150] if url is not None else None)
         if isinstance(node.func, ast.Attribute) and node.func.attr in LOG_METHODS \
                 and "log" in dotted(node.func.value).lower():
             hit = tokens(" ".join(ast.unparse(a) for a in node.args)) & PERSONAL
@@ -157,6 +179,8 @@ def _scan_template(rel: str, text: str, add):
             add(kind, rel, i, line.strip()[:300], {"input": "checkbox"})
         elif m := re.search(r"<input[^>]*name=[\"']([\w\-]+)[\"']", low):
             add("form_input", rel, i, line.strip()[:300], {"name": m.group(1)})
+        if re.search(r"href=[\"'][^\"']*(unsubscribe|opt-?out|withdraw)[^\"']*[\"']", low):
+            add("consent_ui", rel, i, line.strip()[:300], {"control": "withdraw_link"})
         if re.search(r"href=[\"'][^\"']*privacy[^\"']*[\"']", low):
             add("privacy_notice_link", rel, i, line.strip()[:300], {})
         if "purpose" in low or "we use your" in low or "we collect" in low:
@@ -186,7 +210,7 @@ def scan_project(root: str | Path):
                 continue
             files += 1
             if tokens(path.stem) & RETENTION:  # e.g. management/commands/purge_inactive_accounts.py
-                add("retention_logic", rel, 1, "", {"name": path.stem, "role": "file"})
+                add("retention_logic", rel, 1, source[:400], {"name": path.stem, "role": "file"})
             _Visitor(rel, source, add).visit(tree)
             if path.name.startswith("settings"):
                 _scan_settings(rel, source, tree, add)

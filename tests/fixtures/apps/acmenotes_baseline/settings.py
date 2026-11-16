@@ -1,0 +1,1 @@
+BACKUP_RETENTION_DAYS = 90  # backups are deleted within 90 days of account deletion

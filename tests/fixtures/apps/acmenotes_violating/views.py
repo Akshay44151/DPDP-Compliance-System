@@ -18,6 +18,7 @@ def register(request):
         aadhaar_number=request.POST["aadhaar"],
         date_of_birth=request.POST["dob"],
         ip_address=request.META.get("REMOTE_ADDR"),
+        device_id=request.META.get("HTTP_USER_AGENT", ""),
     )
     send_mail("Weekly offers", "Check out our deals", "noreply@acmenotes.example", [email])
     requests.post("https://ads.example.com/track", data={"email": email})

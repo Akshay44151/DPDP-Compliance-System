@@ -27,6 +27,7 @@ class AlignmentFinding(BaseModel):
     status: AlignmentStatus
     claim: PolicyClaim | None = None
     fact_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)  # raw scanner evidence behind the finding
     code_locations: list[CodeLocation] = Field(default_factory=list)
     reasoning: str
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
@@ -37,3 +38,5 @@ class AlignmentResult(BaseModel):
 
     findings: list[AlignmentFinding]
     summary: dict[str, int]  # status -> count
+    llm_retries: int = 0   # calls that needed a second attempt (invalid JSON)
+    llm_failures: int = 0  # calls that gave up; their claims became "unverifiable"

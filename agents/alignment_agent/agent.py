@@ -1,22 +1,29 @@
-"""Agent 3: Alignment Agent.
+"""Agent 3: Alignment Agent (LangChain).
 
-Compares policy claims (Agent 1) with implementation facts (Agent 2), one category at a time.
-Deterministic guards keep the LLM honest: every verdict must cite real fact ids,
-every claim gets exactly one finding, and out-of-scope claims never reach the LLM.
+Pass 1 (per category): compare each policy claim with implementation facts -> a verdict per claim.
+Pass 2 (once, whole project): find code behaviour that NO claim in the whole policy discloses.
+Deterministic guards keep the LLM honest: every verdict must cite real fact ids, every claim gets
+exactly one finding, out-of-scope claims never reach the LLM, and "undeclared" items that merely
+repeat facts already explained by a verdict are dropped.
 """
 from __future__ import annotations
 
-import json
+import itertools
 from collections import Counter
+from typing import Literal
 
-from pydantic import BaseModel, ValidationError
+from groq import BadRequestError
+from langchain_core.exceptions import OutputParserException
+from langchain_core.prompts import ChatPromptTemplate
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from agents.alignment_agent.schemas import AlignmentFinding, AlignmentResult, AlignmentStatus
-from agents.implementation_agent.schemas import (IN_SCOPE_CATEGORIES, ImplementationFact,
-                                                 ImplementationReport)
+from agents.implementation_agent.schemas import (IN_SCOPE_CATEGORIES, EvidenceItem,
+                                                 ImplementationFact, ImplementationReport)
 from agents.policy_agent.schemas import PolicyCategory, PolicyClaim, PolicyExtractionResult
+from llm.langchain_model import get_langchain_model
 
-SYSTEM_PROMPT = """You are the Alignment Agent in a DPDP Act 2023 compliance pipeline. You compare \
+VERDICT_PROMPT = """You are the Alignment Agent in a DPDP Act 2023 compliance pipeline. You compare \
 what a privacy policy PROMISES (claims) with what the application code ACTUALLY DOES (facts) for \
 ONE privacy category.
 
@@ -27,46 +34,101 @@ For every claim give one verdict:
 for something the claim promises, e.g. claim promises consent but data is used with no consent check).
 - "unverifiable": the facts say nothing relevant to this claim.
 Rules:
+- A fact of type "absent" can also SUPPORT a claim that promises something does not happen (for \
+example the claim says personal data is not shared with advertisers and a fact says no code sends \
+data to external services: that is "aligned").
+- Do not hedge. If the facts show the code doing what the claim promises it does NOT do (for \
+example personal data going to an external advertising or tracking URL when the claim says data is \
+not used for advertising), the verdict is "violated". Use "partial" only when part of the claim is \
+clearly supported and another part is not.
 - aligned, partial and violated MUST cite fact ids from the list. Never invent ids.
 - Judge only from the facts given. Do not assume code behaviour that is not listed.
-- Separately, list "undeclared" items: facts of type "present" or "partial" showing the code \
-collects, uses or shares personal data in a way that NO claim in this category mentions \
-(e.g. a sensitive field the policy never discloses). Do not repeat facts already used in a verdict.
+- The claim wording is only a label; judge by the policy excerpt (the verbatim quote).
 - Keep reasoning to one or two sentences. confidence is between 0 and 1."""
+
+UNDECLARED_PROMPT = """You are the Alignment Agent in a DPDP Act 2023 compliance pipeline. You are \
+given ALL claims of a privacy policy and the personal-data practices found in the application code \
+(each collected field, data use or data transfer is one line with an id).
+
+List "undeclared" practices: code that collects, logs, shares or sends personal data in a way that NO \
+claim anywhere in the policy discloses (for example a sensitive identifier the policy never mentions, \
+or personal data sent to a third party the policy does not name).
+Rules:
+- Check every claim before listing something. A practice that any claim already mentions is NOT undeclared.
+- Group related lines into ONE item per distinct practice (for example every undisclosed identifier \
+field together) and cite every id in the group.
+- Do not list lines under ALREADY REPORTED.
+- Cite ids from the list only. Keep reasoning to one or two sentences. confidence is between 0 and 1."""
+
+HUMAN_PROMPT = "{task_input}"  # rendered claims/facts go in as a variable, so braces are safe
+
+# Failures that mean "the model's structured output was unusable"; anything else (auth, network,
+# rate limit) is a real error and is allowed to propagate.
+RETRYABLE = (OutputParserException, ValidationError, BadRequestError)
 
 
 class _Verdict(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # all fields required: strict-schema friendly
+
     claim_id: str
-    status: str
-    fact_ids: list[str] = []
-    reasoning: str = ""
-    confidence: float = 0.5
+    status: Literal["aligned", "partial", "violated", "unverifiable"]
+    fact_ids: list[str]
+    reasoning: str
+    confidence: float
+
+
+class _VerdictList(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    verdicts: list[_Verdict]
 
 
 class _Undeclared(BaseModel):
-    fact_ids: list[str]
-    reasoning: str = ""
-    confidence: float = 0.5
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_ids: list[str]
+    reasoning: str
+    confidence: float
 
 
-class _Raw(BaseModel):
-    verdicts: list[_Verdict]
-    undeclared: list[_Undeclared] = []
+class _UndeclaredList(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
+    undeclared: list[_Undeclared]
+
+
+# Evidence kinds that are personal-data practices, and the category an undisclosed one falls under.
+PRACTICE_CATEGORY = {
+    "model_field": PolicyCategory.TRANSPARENCY_NOTICE,         # collected but not disclosed
+    "data_sharing": PolicyCategory.PURPOSE_LIMITATION,
+    "outbound_email": PolicyCategory.PURPOSE_LIMITATION,
+    "personal_data_logged": PolicyCategory.PURPOSE_LIMITATION,
+}
 
 EVIDENCE_BASED = {AlignmentStatus.ALIGNED, AlignmentStatus.PARTIAL, AlignmentStatus.VIOLATED}
 
 
 class AlignmentAgent:
-    def __init__(self, llm_client) -> None:
-        self.llm = llm_client
+    def __init__(self, model=None) -> None:
+        self.model = model or get_langchain_model()
+        self.verdict_chain = ChatPromptTemplate.from_messages(
+            [("system", VERDICT_PROMPT), ("human", HUMAN_PROMPT)]
+        ) | self.model.with_structured_output(_VerdictList)
+        self.undeclared_chain = ChatPromptTemplate.from_messages(
+            [("system", UNDECLARED_PROMPT), ("human", HUMAN_PROMPT)]
+        ) | self.model.with_structured_output(_UndeclaredList)
+        self.retries = 0
+        self.failures = 0
+        self.last_error: str | None = None
 
     # ---------- public ----------
     def run(self, policy: PolicyExtractionResult, implementation: ImplementationReport) -> AlignmentResult:
+        self.retries = self.failures = 0
         findings: list[AlignmentFinding] = []
+        counter = itertools.count(1)
 
         def new_id() -> str:
-            return f"A-{len(findings) + 1:03d}"
+            return f"A-{next(counter):03d}"
 
         for claim in policy.claims:
             if claim.category not in IN_SCOPE_CATEGORIES:
@@ -75,10 +137,11 @@ class AlignmentAgent:
                     status=AlignmentStatus.OUT_OF_SCOPE, claim=claim,
                     reasoning="Category is outside the five principles evaluated by this framework."))
 
+        # Pass 1: verdicts, one category at a time
         for category in IN_SCOPE_CATEGORIES:
             claims = [c for c in policy.claims if c.category == category]
             facts = [f for f in implementation.facts if f.category == category]
-            if not claims and not facts:
+            if not claims:
                 continue
             if not facts:  # nothing to compare against
                 for c in claims:
@@ -87,20 +150,25 @@ class AlignmentAgent:
                         status=AlignmentStatus.UNVERIFIABLE, claim=c,
                         reasoning="No implementation facts were extracted for this category."))
                 continue
-            raw = self._ask(category, claims, facts)
-            findings.extend(self._to_findings(category, claims, facts, raw, new_id))
+            raw = self._ask(self.verdict_chain, self._render_verdict(category, claims, facts), _VerdictList)
+            new = self._verdict_findings(category, claims, facts, raw, new_id)
+            findings.extend(new)
+
+        # Pass 2: undeclared behaviour, with the whole policy in view
+        reported = {e for f in findings if f.status == AlignmentStatus.VIOLATED for e in f.evidence_ids}
+        findings.extend(self._undeclared_findings(policy, implementation, reported, new_id))
 
         summary = dict(Counter(f.status.value for f in findings))
-        return AlignmentResult(findings=findings, summary=summary)
+        return AlignmentResult(findings=findings, summary=summary,
+                               llm_retries=self.retries, llm_failures=self.failures)
 
-    # ---------- internals ----------
-    def _to_findings(self, category, claims, facts, raw: _Raw, new_id) -> list[AlignmentFinding]:
+    # ---------- pass 1 ----------
+    def _verdict_findings(self, category, claims, facts, raw: _VerdictList, new_id) -> list[AlignmentFinding]:
         facts_by_id = {f.id: f for f in facts}
         verdicts = {}
         for v in raw.verdicts:
             verdicts.setdefault(v.claim_id, v)  # first verdict per claim wins
         out: list[AlignmentFinding] = []
-
         for i, claim in enumerate(claims, 1):
             v = verdicts.get(f"C{i}")
             if v is None:
@@ -120,49 +188,91 @@ class AlignmentAgent:
                 reasoning = f"Downgraded: no valid supporting fact cited. {reasoning}".strip()
             out.append(self._finding(new_id(), category, status, claim, ids, reasoning,
                                      v.confidence, facts_by_id))
-
-        for u in raw.undeclared:
-            ids = [x for x in u.fact_ids if x in facts_by_id]
-            if not ids:
-                continue
-            out.append(self._finding(new_id(), category, AlignmentStatus.UNDECLARED, None, ids,
-                                     u.reasoning, u.confidence, facts_by_id))
         return out
 
+    # ---------- pass 2 ----------
+    def _undeclared_findings(self, policy, implementation, reported: set[str], new_id):
+        practices = [e for e in implementation.evidence if e.kind in PRACTICE_CATEGORY]
+        if not practices:
+            return []
+        raw = self._ask(self.undeclared_chain,
+                        self._render_undeclared(policy.claims, practices, reported), _UndeclaredList)
+        by_id = {e.id: e for e in practices}
+        seen = set(reported)  # violations are already reported; later items may not repeat earlier ones
+        out: list[AlignmentFinding] = []
+        for u in raw.undeclared:
+            ids = [x for x in dict.fromkeys(u.evidence_ids) if x in by_id and x not in seen]
+            if not ids:
+                continue
+            seen.update(ids)
+            out.append(AlignmentFinding(
+                id=new_id(), kind="undeclared_behavior", category=PRACTICE_CATEGORY[by_id[ids[0]].kind],
+                status=AlignmentStatus.UNDECLARED, claim=None, evidence_ids=ids,
+                fact_ids=[f.id for f in implementation.facts if set(f.evidence_ids) & set(ids)],
+                code_locations=[by_id[x].location for x in ids],
+                reasoning=u.reasoning, confidence=min(max(u.confidence, 0.0), 1.0)))
+        return out
+
+    # ---------- shared ----------
     @staticmethod
     def _finding(fid, category, status, claim, ids, reasoning, confidence, facts_by_id) -> AlignmentFinding:
         return AlignmentFinding(
             id=fid,
             kind="undeclared_behavior" if status == AlignmentStatus.UNDECLARED else "claim_check",
             category=category, status=status, claim=claim, fact_ids=ids,
+            evidence_ids=list(dict.fromkeys(e for x in ids for e in facts_by_id[x].evidence_ids)),
             code_locations=[loc for x in ids for loc in facts_by_id[x].locations],
             reasoning=reasoning, confidence=min(max(confidence, 0.0), 1.0))
 
-    def _ask(self, category: PolicyCategory, claims: list[PolicyClaim],
-             facts: list[ImplementationFact]) -> _Raw:
-        user_prompt = self._render(category, claims, facts)
-        schema = _Raw.model_json_schema()
+    def _ask(self, chain, task_input: str, model_cls):
         last_err = ""
-        for _ in range(2):  # one retry on invalid JSON
-            prompt = user_prompt if not last_err else (
-                user_prompt + f"\n\nYour previous reply was invalid: {last_err}. Return valid JSON only.")
-            text = self.llm.generate(system_prompt=SYSTEM_PROMPT, user_prompt=prompt,
-                                     response_schema=schema)
+        for attempt in range(2):  # one retry when the structured output is unusable
+            text = task_input if not last_err else (
+                task_input + f"\n\nYour previous reply was invalid: {last_err}. "
+                "Return the required structured output only.")
             try:
-                return _Raw.model_validate(json.loads(text))
-            except (json.JSONDecodeError, ValidationError) as exc:
-                last_err = str(exc)[:200]
-        return _Raw(verdicts=[])  # fail soft: every claim becomes "unverifiable"
+                return model_cls.model_validate(chain.invoke({"task_input": text}))
+            except RETRYABLE as exc:
+                last_err = self.last_error = str(exc)[:200]
+                if attempt == 0:
+                    self.retries += 1
+        self.failures += 1
+        return model_cls.model_validate({k: [] for k in model_cls.model_fields})  # fail soft
 
     @staticmethod
-    def _render(category, claims, facts) -> str:
+    def _fact_line(f: ImplementationFact) -> str:
+        where = ", ".join(f"{l.file}:{l.line}" for l in f.locations[:3]) or "no location"
+        return f"{f.id} [{f.fact_type}] {f.statement} ({where})"
+
+    def _render_verdict(self, category, claims, facts) -> str:
         lines = [f"CATEGORY: {category.value}", "POLICY CLAIMS:"]
-        if not claims:
-            lines.append("(the policy makes no claim in this category)")
         for i, c in enumerate(claims, 1):
-            lines.append(f"C{i}: {c.claim}  | policy excerpt: {c.evidence[:200]!r}")
+            lines.append(f"C{i}: policy excerpt: {c.evidence[:400]!r}  | label: {c.claim}")
         lines.append("IMPLEMENTATION FACTS:")
-        for f in facts:
-            where = ", ".join(f"{l.file}:{l.line}" for l in f.locations[:3]) or "no location"
-            lines.append(f"{f.id} [{f.fact_type}] {f.statement} ({where})")
+        lines.extend(self._fact_line(f) for f in facts)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _practice(e: EvidenceItem) -> str:
+        d = e.detail
+        if e.kind == "model_field":
+            return f"stores field {d.get('model')}.{d.get('field')} ({d.get('field_type')})"
+        if e.kind == "data_sharing":
+            return f"sends data to an external service via {d.get('call')}: {e.snippet[:150]!r}"
+        if e.kind == "outbound_email":
+            return (f"function {d.get('function')} sends email "
+                    f"(references consent: {d.get('references_consent')})")
+        if e.kind == "personal_data_logged":
+            return f"writes personal data to logs ({', '.join(d.get('personal_tokens', []))}): {e.snippet[:100]!r}"
+        return e.snippet[:150]
+
+    def _render_undeclared(self, claims: list[PolicyClaim], practices: list[EvidenceItem],
+                           reported: set[str]) -> str:
+        lines = ["TASK: undeclared", "ALL POLICY CLAIMS (every category):"]
+        for c in claims:
+            lines.append(f"- [{c.category.value}] {c.evidence[:300]!r}")
+        lines.append("CODE PRACTICES:")
+        for e in practices:
+            lines.append(f"{e.id} [{e.kind}] {e.location.file}:{e.location.line} {self._practice(e)}")
+        lines.append(f"ALREADY REPORTED: {', '.join(sorted(reported)) or '(none)'}")
         return "\n".join(lines)
