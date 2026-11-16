@@ -1,10 +1,20 @@
 
 import json
 
+from jsonschema import ValidationError, validate
+
 from groq import Groq
 
 from llm.client import LLMClient
 from llm.config import LLMConfig, get_llm_config
+
+
+class MalformedJSONError(ValueError):
+    """Raised when a schema-constrained response is not valid JSON."""
+
+
+class ResponseSchemaError(ValueError):
+    """Raised when parsed response data does not match its JSON Schema."""
 
 
 class GroqLLMClient:
@@ -60,7 +70,24 @@ class GroqLLMClient:
 
         content = completion.choices[0].message.content
 
-        if content is None:
+        if content is None or not content.strip():
             raise RuntimeError("Groq returned an empty response.")
 
-        return content
+        if response_schema is None:
+            return content
+
+        try:
+            response_data = json.loads(content)
+        except json.JSONDecodeError as error:
+            raise MalformedJSONError(
+                "Groq returned malformed JSON for a schema-constrained response."
+            ) from error
+
+        try:
+            validate(instance=response_data, schema=response_schema)
+        except ValidationError as error:
+            raise ResponseSchemaError(
+                f"Groq response did not match the supplied schema: {error.message}"
+            ) from error
+
+        return json.dumps(response_data)

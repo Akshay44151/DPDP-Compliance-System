@@ -12,5 +12,5 @@ class LLMClient(Protocol):
         user_prompt: str,
         response_schema: dict[str, Any] | None = None,
     ) -> str:
-        """Generate a response, optionally following a JSON schema."""
+        """Generate text, or validated JSON text when a schema is supplied."""
         ...
