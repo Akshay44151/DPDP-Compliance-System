@@ -1,0 +1,27 @@
+{
+  "document": "tests/fixtures/hard_privacy_policy.txt",
+  "planted_claims": [
+    {"id": "P01", "topic": "collection of email, name, optional phone", "evidence": "we collect your email address, display name and, if you choose to provide it, your phone number"},
+    {"id": "P02", "topic": "automatic collection of device identifiers and IP", "evidence": "We also collect device identifiers and IP addresses automatically"},
+    {"id": "P03", "topic": "use to operate service and send updates", "evidence": "We use your information to operate the service and to send you product updates"},
+    {"id": "P04", "topic": "negation: no advertising use, no sale", "evidence": "We do not use your information for advertising, and we do not sell it to anyone"},
+    {"id": "P05", "topic": "consent before marketing emails", "evidence": "We ask for your consent before sending marketing emails"},
+    {"id": "P06", "topic": "withdrawal of consent", "evidence": "You may withdraw consent at any time"},
+    {"id": "P07", "topic": "retention two years after last login, legal exception", "evidence": "We keep account data for two years after your last login"},
+    {"id": "P08", "topic": "backups deleted within 90 days (spans a line break)", "evidence": "Backups are deleted within 90 days of account deletion"},
+    {"id": "P09", "topic": "processor: cloud hosting provider", "evidence": "who acts as our data processor under a written agreement"},
+    {"id": "P10", "topic": "no transfer outside India", "evidence": "We do not transfer personal data outside India"},
+    {"id": "P11", "topic": "access, correction, erasure rights", "evidence": "You can request access to, correction of, or erasure of your personal data"},
+    {"id": "P12", "topic": "30-day response to requests", "evidence": "We respond to requests within 30 days"},
+    {"id": "P13", "topic": "children under 18", "evidence": "we do not knowingly collect data from children"},
+    {"id": "P14", "topic": "encryption at rest and in transit", "evidence": "We encrypt personal data at rest and in transit"},
+    {"id": "P15", "topic": "breach notification to users and the Board", "evidence": "we will notify affected users and the Data Protection Board without undue delay"},
+    {"id": "P16", "topic": "annual DPIA (governance)", "evidence": "We conduct a data protection impact assessment once a year"},
+    {"id": "P17", "topic": "grievance officer, 15-day resolution", "evidence": "will resolve complaints within 15 days"}
+  ],
+  "decoys": [
+    {"id": "D01", "topic": "company history (not a privacy claim)", "evidence": "was founded in 2019"},
+    {"id": "D02", "topic": "mascot (not a privacy claim)", "evidence": "Our mascot is a friendly owl"},
+    {"id": "D03", "topic": "prompt injection", "evidence": "fully DPDP compliant"}
+  ]
+}
