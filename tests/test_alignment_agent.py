@@ -104,13 +104,14 @@ def test_full_flow_out_of_scope_skips_llm_and_undeclared_uses_raw_evidence():
     und = by_status(result, S.UNDECLARED)
     assert len(und) == 1 and und[0].evidence_ids == ["E5", "E6"] and und[0].fact_ids == ["F4"]
     assert und[0].claim is None and und[0].kind == "undeclared_behavior"
+    assert und[0].reason_code == "undeclared_practice"
     assert und[0].category == C.TRANSPARENCY_NOTICE
     assert [l.line for l in und[0].code_locations] == [9, 10]
     prompt = model.prompts["undeclared"]
     assert "[transparency_notice]" in prompt and "[data_sharing]" in prompt   # whole policy in view
     assert "E5 [model_field]" in prompt and "ALREADY REPORTED: E7" in prompt
     assert len({f.id for f in result.findings}) == len(result.findings)       # finding ids are unique
-    assert result.llm_failures == 0 and result.llm_retries == 0
+    assert result.llm_failures == 0 and result.llm_retries == 0 and result.failed_calls == []
     assert sum(result.summary.values()) == len(result.findings)
 
 
@@ -125,6 +126,8 @@ def test_unsupported_verdicts_are_downgraded_and_missing_ones_filled():
     assert [f.status for f in claim_checks] == [S.UNVERIFIABLE, S.UNVERIFIABLE]
     assert "Downgraded" in claim_checks[0].reasoning          # hallucinated fact id
     assert "no verdict" in claim_checks[1].reasoning          # claim C2 skipped by model
+    assert claim_checks[0].reason_code == "unsupported_evidence"
+    assert claim_checks[1].reason_code == "invalid_model_output"
 
 
 def test_unusable_output_is_counted_and_makes_claims_unverifiable():
@@ -138,7 +141,23 @@ def test_unusable_output_is_counted_and_makes_claims_unverifiable():
     assert model.called.count("consent") == 2                 # one call + one retry
     assert [f.status for f in result.findings] == [S.UNVERIFIABLE, S.UNVERIFIABLE]
     assert "No implementation facts" in result.findings[1].reasoning
+    assert result.findings[1].reason_code == "evidence_gap"
     assert result.llm_retries == 1 and result.llm_failures == 1 and agent.last_error
+    assert result.findings[0].reason_code == "model_failure"
+    assert result.failed_calls == ["verdict:consent"]
+
+
+def test_failed_global_undeclared_pass_is_reported_in_failed_calls():
+    model = KeyedChatModel({"undeclared": OutputParserException("bad json")})
+    policy = PolicyExtractionResult(claims=[])
+    rep = report(evidence=[ev("E1", "model_field", 9, model="Profile", field="email")])
+
+    result = AlignmentAgent(model).run(policy, rep)
+
+    assert model.called.count("undeclared") == 2
+    assert not by_status(result, S.UNDECLARED)
+    assert result.llm_failures == 1
+    assert result.failed_calls == ["undeclared"]
 
 
 def test_agents_build_on_the_real_chatgroq_model_without_network():

@@ -120,10 +120,13 @@ class AlignmentAgent:
         self.retries = 0
         self.failures = 0
         self.last_error: str | None = None
+        self.failed_calls: list[str] = []
 
     # ---------- public ----------
     def run(self, policy: PolicyExtractionResult, implementation: ImplementationReport) -> AlignmentResult:
         self.retries = self.failures = 0
+        self.last_error = None
+        self.failed_calls = []
         findings: list[AlignmentFinding] = []
         counter = itertools.count(1)
 
@@ -135,6 +138,7 @@ class AlignmentAgent:
                 findings.append(AlignmentFinding(
                     id=new_id(), kind="claim_check", category=claim.category,
                     status=AlignmentStatus.OUT_OF_SCOPE, claim=claim,
+                    reason_code="out_of_scope",
                     reasoning="Category is outside the five principles evaluated by this framework."))
 
         # Pass 1: verdicts, one category at a time
@@ -148,10 +152,14 @@ class AlignmentAgent:
                     findings.append(AlignmentFinding(
                         id=new_id(), kind="claim_check", category=category,
                         status=AlignmentStatus.UNVERIFIABLE, claim=c,
+                        reason_code="evidence_gap",
                         reasoning="No implementation facts were extracted for this category."))
                 continue
-            raw = self._ask(self.verdict_chain, self._render_verdict(category, claims, facts), _VerdictList)
-            new = self._verdict_findings(category, claims, facts, raw, new_id)
+            call_id = f"verdict:{category.value}"
+            raw = self._ask(self.verdict_chain, self._render_verdict(category, claims, facts),
+                            _VerdictList, call_id)
+            new = self._verdict_findings(
+                category, claims, facts, raw, new_id, model_failed=call_id in self.failed_calls)
             findings.extend(new)
 
         # Pass 2: undeclared behaviour, with the whole policy in view
@@ -160,10 +168,12 @@ class AlignmentAgent:
 
         summary = dict(Counter(f.status.value for f in findings))
         return AlignmentResult(findings=findings, summary=summary,
-                               llm_retries=self.retries, llm_failures=self.failures)
+                               llm_retries=self.retries, llm_failures=self.failures,
+                               failed_calls=self.failed_calls)
 
     # ---------- pass 1 ----------
-    def _verdict_findings(self, category, claims, facts, raw: _VerdictList, new_id) -> list[AlignmentFinding]:
+    def _verdict_findings(self, category, claims, facts, raw: _VerdictList, new_id,
+                          model_failed: bool = False) -> list[AlignmentFinding]:
         facts_by_id = {f.id: f for f in facts}
         verdicts = {}
         for v in raw.verdicts:
@@ -172,22 +182,30 @@ class AlignmentAgent:
         for i, claim in enumerate(claims, 1):
             v = verdicts.get(f"C{i}")
             if v is None:
+                reason_code = "model_failure" if model_failed else "invalid_model_output"
+                reasoning = ("The model call failed after retries; this claim could not be assessed."
+                             if model_failed else "The model returned no verdict for this claim.")
                 out.append(self._finding(new_id(), category, AlignmentStatus.UNVERIFIABLE, claim, [],
-                                         "The model returned no verdict for this claim.", 0.0, facts_by_id))
+                                         reasoning, 0.0, facts_by_id, reason_code))
                 continue
             try:
                 status = AlignmentStatus(v.status)
             except ValueError:
                 status = AlignmentStatus.UNVERIFIABLE
+            reason_code = "model_assessed"
             if status in (AlignmentStatus.OUT_OF_SCOPE, AlignmentStatus.UNDECLARED):
                 status = AlignmentStatus.UNVERIFIABLE
+                reason_code = "invalid_model_output"
+            elif status == AlignmentStatus.UNVERIFIABLE:
+                reason_code = "evidence_gap"
             ids = [x for x in v.fact_ids if x in facts_by_id]
             reasoning = v.reasoning
             if status in EVIDENCE_BASED and not ids:  # unsupported verdict -> downgrade
                 status = AlignmentStatus.UNVERIFIABLE
                 reasoning = f"Downgraded: no valid supporting fact cited. {reasoning}".strip()
+                reason_code = "unsupported_evidence"
             out.append(self._finding(new_id(), category, status, claim, ids, reasoning,
-                                     v.confidence, facts_by_id))
+                                     v.confidence, facts_by_id, reason_code))
         return out
 
     # ---------- pass 2 ----------
@@ -196,7 +214,8 @@ class AlignmentAgent:
         if not practices:
             return []
         raw = self._ask(self.undeclared_chain,
-                        self._render_undeclared(policy.claims, practices, reported), _UndeclaredList)
+                        self._render_undeclared(policy.claims, practices, reported),
+                        _UndeclaredList, "undeclared")
         by_id = {e.id: e for e in practices}
         seen = set(reported)  # violations are already reported; later items may not repeat earlier ones
         out: list[AlignmentFinding] = []
@@ -207,7 +226,8 @@ class AlignmentAgent:
             seen.update(ids)
             out.append(AlignmentFinding(
                 id=new_id(), kind="undeclared_behavior", category=PRACTICE_CATEGORY[by_id[ids[0]].kind],
-                status=AlignmentStatus.UNDECLARED, claim=None, evidence_ids=ids,
+                status=AlignmentStatus.UNDECLARED, reason_code="undeclared_practice",
+                claim=None, evidence_ids=ids,
                 fact_ids=[f.id for f in implementation.facts if set(f.evidence_ids) & set(ids)],
                 code_locations=[by_id[x].location for x in ids],
                 reasoning=u.reasoning, confidence=min(max(u.confidence, 0.0), 1.0)))
@@ -215,16 +235,17 @@ class AlignmentAgent:
 
     # ---------- shared ----------
     @staticmethod
-    def _finding(fid, category, status, claim, ids, reasoning, confidence, facts_by_id) -> AlignmentFinding:
+    def _finding(fid, category, status, claim, ids, reasoning, confidence, facts_by_id,
+                 reason_code: str = "model_assessed") -> AlignmentFinding:
         return AlignmentFinding(
             id=fid,
             kind="undeclared_behavior" if status == AlignmentStatus.UNDECLARED else "claim_check",
-            category=category, status=status, claim=claim, fact_ids=ids,
+            category=category, status=status, reason_code=reason_code, claim=claim, fact_ids=ids,
             evidence_ids=list(dict.fromkeys(e for x in ids for e in facts_by_id[x].evidence_ids)),
             code_locations=[loc for x in ids for loc in facts_by_id[x].locations],
             reasoning=reasoning, confidence=min(max(confidence, 0.0), 1.0))
 
-    def _ask(self, chain, task_input: str, model_cls):
+    def _ask(self, chain, task_input: str, model_cls, call_id: str):
         last_err = ""
         for attempt in range(2):  # one retry when the structured output is unusable
             text = task_input if not last_err else (
@@ -237,6 +258,7 @@ class AlignmentAgent:
                 if attempt == 0:
                     self.retries += 1
         self.failures += 1
+        self.failed_calls.append(call_id)
         return model_cls.model_validate({k: [] for k in model_cls.model_fields})  # fail soft
 
     @staticmethod

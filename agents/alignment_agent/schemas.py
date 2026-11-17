@@ -25,6 +25,10 @@ class AlignmentFinding(BaseModel):
     kind: Literal["claim_check", "undeclared_behavior"]
     category: PolicyCategory
     status: AlignmentStatus
+    reason_code: Literal[
+        "model_assessed", "evidence_gap", "model_failure", "invalid_model_output",
+        "unsupported_evidence", "out_of_scope", "undeclared_practice",
+    ] = Field(default="model_assessed", description="Why the finding was emitted or downgraded.")
     claim: PolicyClaim | None = None
     fact_ids: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)  # raw scanner evidence behind the finding
@@ -39,4 +43,8 @@ class AlignmentResult(BaseModel):
     findings: list[AlignmentFinding]
     summary: dict[str, int]  # status -> count
     llm_retries: int = 0   # calls that needed a second attempt (invalid JSON)
-    llm_failures: int = 0  # calls that gave up; their claims became "unverifiable"
+    llm_failures: int = 0  # calls that gave up; inspect failed_calls for their stage/category
+    failed_calls: list[str] = Field(
+        default_factory=list,
+        description="Exhausted call IDs: verdict:<category-value> or undeclared.",
+    )
