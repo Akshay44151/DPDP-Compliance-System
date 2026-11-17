@@ -276,3 +276,67 @@ def test_api_failure_is_recorded_without_retry():
     assert result.failed_calls[0].alignment_finding_id == "A1"
     assert result.failed_calls[0].attempt == 1
     assert result.failed_calls[0].error_type == "RuntimeError"
+
+
+def test_api_failure_stops_llm_calls_for_remaining_findings():
+    request = make_request()
+    second_finding = request.alignment_result.findings[0].model_copy(
+        update={"id": "A2"}
+    )
+    request.alignment_result.findings.append(second_finding)
+
+    llm = SequenceLLM([RuntimeError("API unavailable")])
+
+    agent = LegalAnalysisAgent(
+        llm_client=llm,
+        retriever=FakeRetriever([make_chunk()]),
+    )
+
+    result = agent.run(request)
+
+    assert llm.calls == 1
+    assert len(result.findings) == 2
+    assert result.findings[0].status == LegalAssessmentStatus.INSUFFICIENT_EVIDENCE
+    assert result.findings[1].status == LegalAssessmentStatus.INSUFFICIENT_EVIDENCE
+    assert len(result.failed_calls) == 1
+    assert "stopped" in result.findings[1].legal_reasoning.lower()
+
+
+def test_retrieval_failure_is_recorded():
+    class FailingRetriever:
+        def retrieve(self, query, *, k=5):
+            raise ConnectionError("Legal database unavailable")
+
+    agent = LegalAnalysisAgent(
+        llm_client=FakeLLM(valid_response()),
+        retriever=FailingRetriever(),
+    )
+
+    result = agent.run(make_request())
+
+    assert result.findings[0].status == LegalAssessmentStatus.INSUFFICIENT_EVIDENCE
+    assert len(result.retrieval_failures) == 1
+    assert result.retrieval_failures[0].alignment_finding_id == "A1"
+    assert result.retrieval_failures[0].error_type == "ConnectionError"
+
+
+def test_legal_conclusion_without_linked_fact_is_rejected():
+    response = valid_response()
+    response["evidence_fact_ids"] = []
+
+    llm = SequenceLLM([response, response])
+
+    agent = LegalAnalysisAgent(
+        llm_client=llm,
+        retriever=FakeRetriever([make_chunk()]),
+    )
+
+    result = agent.run(make_request())
+
+    assert llm.calls == 2
+    assert result.findings[0].status == LegalAssessmentStatus.INSUFFICIENT_EVIDENCE
+    assert len(result.failed_calls) == 2
+    assert all(
+        call.error_type == "ValueError"
+        for call in result.failed_calls
+    )

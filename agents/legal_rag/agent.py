@@ -6,7 +6,6 @@ from dataclasses import replace
 from typing import Any
 
 from agents.alignment_agent.schemas import AlignmentStatus
-from agents.legal_rag.retriever import LegalRetriever
 from llm.groq_client import MalformedJSONError, ResponseSchemaError
 from agents.legal_rag.schemas import (
     LegalAnalysisRequest,
@@ -93,6 +92,10 @@ def normalise(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+class LLMServiceUnavailable(Exception):
+    """Signals that the legal LLM service failed and further calls should stop."""
+
+
 class LegalAnalysisAgent:
     """Agent 4: assesses alignment findings against retrieved primary law."""
 
@@ -104,7 +107,11 @@ class LegalAnalysisAgent:
             llm_client = GroqLLMClient(config=config)
 
         self.llm_client = llm_client
-        self.retriever = retriever if retriever is not None else LegalRetriever()
+        if retriever is None:
+            from agents.legal_rag.retriever import LegalRetriever
+            retriever = LegalRetriever()
+
+        self.retriever = retriever
 
     def run(self, request: LegalAnalysisRequest) -> LegalAnalysisResult:
         implementation = request.implementation_report
@@ -113,6 +120,8 @@ class LegalAnalysisAgent:
         findings = []
         consulted = set()
         failed_calls = []
+        retrieval_failures = []
+        llm_service_failed = False
 
         for alignment in request.alignment_result.findings:
             if alignment.status == AlignmentStatus.OUT_OF_SCOPE:
@@ -128,6 +137,14 @@ class LegalAnalysisAgent:
                     alignment.id,
                     f"Agent 3 status '{alignment.status.value}' does not support a legal assessment.",
                     ["No legal LLM assessment was attempted for this finding."],
+                ))
+                continue
+
+            if llm_service_failed:
+                findings.append(self.insufficient(
+                    alignment.id,
+                    "Legal assessment was stopped because the LLM service failed on an earlier finding.",
+                    ["No retrieval or LLM call was attempted for this finding after the service failure."],
                 ))
                 continue
 
@@ -162,10 +179,14 @@ class LegalAnalysisAgent:
             try:
                 chunks = self.retriever.retrieve(query, k=5)
             except Exception as exc:
+                retrieval_failures.append({
+                    "alignment_finding_id": alignment.id,
+                    "error_type": type(exc).__name__,
+                })
                 findings.append(self.insufficient(
                     alignment.id,
                     f"Legal source retrieval failed: {type(exc).__name__}.",
-                    ["The legal source database could not be queried."],
+                    ["The legal source database could not be queried; this is a retrieval failure, not a confirmed absence of relevant law."],
                 ))
                 continue
 
@@ -179,12 +200,19 @@ class LegalAnalysisAgent:
 
             consulted.update(chunk.source_file for chunk in chunks)
 
-            findings.append(
-                self.assess_one(
+            try:
+                finding = self.assess_one(
                     alignment, facts, evidence_ids, chunks, evidence_by_id,
                     failed_calls,
                 )
-            )
+                findings.append(finding)
+            except LLMServiceUnavailable as exc:
+                llm_service_failed = True
+                findings.append(self.insufficient(
+                    alignment.id,
+                    f"Legal LLM service became unavailable: {type(exc.__cause__).__name__ if exc.__cause__ else type(exc).__name__}.",
+                    ["The failed service call was recorded. Further LLM calls were stopped to avoid repeated API failures."],
+                ))
 
         counts = {status.value: 0 for status in LegalAssessmentStatus}
         for finding in findings:
@@ -195,6 +223,7 @@ class LegalAnalysisAgent:
             summary=counts,
             sources_consulted=sorted(consulted),
             failed_calls=failed_calls,
+            retrieval_failures=retrieval_failures,
         )
 
     def assess_one(self, alignment, facts, evidence_ids, chunks, evidence_by_id,
@@ -247,11 +276,9 @@ class LegalAnalysisAgent:
                     "attempt": attempt,
                     "error_type": type(exc).__name__,
                 })
-                return self.insufficient(
-                    alignment.id,
-                    f"Legal LLM call failed: {type(exc).__name__}.",
-                    ["The legal assessment call failed; no legal conclusion was made."],
-                )
+                raise LLMServiceUnavailable(
+                    f"Legal LLM call failed: {type(exc).__name__}."
+                ) from exc
 
             try:
                 data = json.loads(raw)
@@ -271,8 +298,13 @@ class LegalAnalysisAgent:
                 if status in {
                     LegalAssessmentStatus.POTENTIAL_COMPLIANCE,
                     LegalAssessmentStatus.POTENTIAL_NON_COMPLIANCE,
-                } and not citations:
-                    raise ValueError("A legal conclusion requires a citation.")
+                }:
+                    if not data["evidence_fact_ids"]:
+                        raise ValueError(
+                            "A legal conclusion requires at least one linked implementation fact."
+                        )
+                    if not citations:
+                        raise ValueError("A legal conclusion requires a citation.")
 
                 return LegalFinding(
                     alignment_finding_id=alignment.id,

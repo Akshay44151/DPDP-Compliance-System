@@ -1,8 +1,13 @@
 ﻿from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from agents.legal_rag.schemas import LegalAnalysisResult, LegalFinding
+from agents.legal_rag.schemas import (
+    FailedLLMCall,
+    FailedRetrieval,
+    LegalAnalysisResult,
+    LegalFinding,
+)
 from agents.scoring.schemas import ComplianceScore
 
 
@@ -25,6 +30,8 @@ class ComplianceReport(BaseModel):
     sources_consulted: list[str]
     executive_summary: str
     disclaimer: str
+    failed_calls: list[FailedLLMCall] = Field(default_factory=list)
+    retrieval_failures: list[FailedRetrieval] = Field(default_factory=list)
 
 
 class ReportGenerationRequest(BaseModel):

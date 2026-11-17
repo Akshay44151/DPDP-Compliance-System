@@ -1,4 +1,10 @@
-﻿from agents.legal_rag.schemas import LegalAnalysisResult, LegalAssessmentStatus as S, LegalFinding
+from agents.legal_rag.schemas import (
+    FailedLLMCall,
+    FailedRetrieval,
+    LegalAnalysisResult,
+    LegalAssessmentStatus as S,
+    LegalFinding,
+)
 from agents.scoring.schemas import ComplianceScore
 from agents.report_agent.schemas import ReportGenerationRequest
 from agents.report_agent.agent import ReportGenerationAgent
@@ -19,6 +25,19 @@ def test_report_contains_findings_recommendations_and_score():
             ),
         ],
         sources_consulted=["dpdp_act.pdf"],
+        failed_calls=[
+            FailedLLMCall(
+                alignment_finding_id="A1",
+                attempt=1,
+                error_type="RateLimitError",
+            )
+        ],
+        retrieval_failures=[
+            FailedRetrieval(
+                alignment_finding_id="A1",
+                error_type="ConnectionError",
+            )
+        ],
     )
 
     score = ComplianceScore(
@@ -28,7 +47,7 @@ def test_report_contains_findings_recommendations_and_score():
         potential_compliance_count=0,
         potential_non_compliance_count=1,
         insufficient_evidence_count=1,
-        requires_review_count=0,
+        requires_review_count=1,
         not_applicable_count=0,
         assessment_coverage_percent=50,
         score_description="Test score",
@@ -49,6 +68,12 @@ def test_report_contains_findings_recommendations_and_score():
     assert report.recommendations[1].priority == "medium"
     assert report.sources_consulted == ["dpdp_act.pdf"]
     assert "not legal advice" in report.disclaimer
+    assert "50.00%" in report.executive_summary
+    assert "1 findings require review" in report.executive_summary
+    assert len(report.failed_calls) == 1
+    assert report.failed_calls[0].error_type == "RateLimitError"
+    assert len(report.retrieval_failures) == 1
+    assert report.retrieval_failures[0].error_type == "ConnectionError"
 
 
 def test_report_handles_missing_score():
@@ -77,3 +102,5 @@ def test_report_handles_missing_score():
     assert report.recommendations == []
     assert report.score.score is None
     assert "No provisional compliance score" in report.executive_summary
+    assert "coverage: unavailable" in report.executive_summary.lower()
+    assert report.failed_calls == []

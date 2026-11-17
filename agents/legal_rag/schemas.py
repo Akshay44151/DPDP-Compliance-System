@@ -68,6 +68,15 @@ class FailedLLMCall(BaseModel):
     error_type: str
 
 
+class FailedRetrieval(BaseModel):
+    """A failed attempt to retrieve legal source passages."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    alignment_finding_id: str
+    error_type: str
+
+
 class LegalAnalysisResult(BaseModel):
     """Complete structured output from Agent 4 for Agent 5."""
 
@@ -77,6 +86,7 @@ class LegalAnalysisResult(BaseModel):
     summary: dict[str, int] = Field(default_factory=dict)
     sources_consulted: list[str] = Field(default_factory=list)
     failed_calls: list[FailedLLMCall] = Field(default_factory=list)
+    retrieval_failures: list[FailedRetrieval] = Field(default_factory=list)
 
 
 class LegalAnalysisRequest(BaseModel):

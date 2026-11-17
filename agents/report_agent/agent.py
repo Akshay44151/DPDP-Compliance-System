@@ -51,15 +51,28 @@ class ReportGenerationAgent:
                     reason=finding.legal_reasoning,
                 ))
 
+        coverage = request.score.assessment_coverage_percent
+        coverage_text = (
+            f"{coverage:.2f}%"
+            if coverage is not None
+            else "unavailable"
+        )
+
+        review_count = request.score.requires_review_count
+
         if request.score.score is None:
             summary = (
                 "No provisional compliance score could be calculated because "
-                "there were no findings with an assessable outcome."
+                "there were no findings with an assessable outcome. "
+                f"Assessment coverage: {coverage_text}. "
+                f"{review_count} findings require review."
             )
         else:
             summary = (
                 f"The provisional assessment score is {request.score.score:.2f}% "
-                f"based on {request.score.assessed_findings} assessable findings. "
+                f"with assessment coverage of {coverage_text}, based on "
+                f"{request.score.assessed_findings} assessable findings. "
+                f"{review_count} findings require review. "
                 f"{request.score.insufficient_evidence_count} findings have "
                 "insufficient evidence and are excluded from the score."
             )
@@ -72,4 +85,6 @@ class ReportGenerationAgent:
             sources_consulted=analysis.sources_consulted,
             executive_summary=summary,
             disclaimer=self.DISCLAIMER,
+            failed_calls=analysis.failed_calls,
+            retrieval_failures=analysis.retrieval_failures,
         )
