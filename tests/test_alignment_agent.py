@@ -330,6 +330,20 @@ def test_fence_tags_inside_untrusted_text_are_neutralised():
     assert model.prompts["consent"].count("</evidence>") == 1
 
 
+def test_agent2_failure_gives_evidence_gap_never_violated_or_undeclared():
+    """Agent 2 gave up on consent: its report has no consent facts and llm_failures > 0."""
+    policy = PolicyExtractionResult(claims=[
+        consent_claim("We obtain consent.", "We obtain consent before marketing.")])
+    rep = ImplementationReport(project_path="x", files_scanned=1, coverage={}, evidence=[],
+                               facts=[], llm_failures=1)
+    model = KeyedChatModel({})
+    result = AlignmentAgent(model).run(policy, rep)
+    [f] = result.findings
+    assert f.status == S.UNVERIFIABLE and f.reason_code == "evidence_gap"
+    assert model.called == []                                   # nothing to judge, so no model call
+    assert not by_status(result, S.VIOLATED) and not by_status(result, S.UNDECLARED)
+
+
 def test_agents_build_on_the_real_chatgroq_model_without_network():
     """Catches schema/structured-output wiring errors at construction time (no API call)."""
     from llm.config import LLMConfig
