@@ -54,3 +54,4 @@ class ImplementationReport(BaseModel):
     facts: list[ImplementationFact]
     llm_retries: int = 0   # calls that needed a second attempt (invalid JSON)
     llm_failures: int = 0  # calls that gave up; that category has no facts
+    failed_categories: list[str] = Field(default_factory=list)  # categories whose LLM call gave up

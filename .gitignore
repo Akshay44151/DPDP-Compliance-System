@@ -221,3 +221,5 @@ __marimo__/
 
 # Person 3 - Generated legal RAG database
 knowledge_base/chroma_db/
+before_*.json
+after_*.json

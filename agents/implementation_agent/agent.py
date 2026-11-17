@@ -91,10 +91,12 @@ class ImplementationExtractionAgent:
         self.chain = self.prompt | self.model.with_structured_output(_RawResponse)
         self.retries = 0
         self.failures = 0
+        self.failed_categories: list[str] = []
         self.last_error: str | None = None
 
     def run(self, project_path: str | Path) -> ImplementationReport:
         self.retries = self.failures = 0
+        self.failed_categories = []
         evidence, files, coverage = scan_project(project_path)
         by_id = {e.id: e for e in evidence}
         facts: list[ImplementationFact] = []
@@ -114,7 +116,8 @@ class ImplementationExtractionAgent:
                 ))
         return ImplementationReport(project_path=str(project_path), files_scanned=files,
                                     coverage=coverage, evidence=evidence, facts=facts,
-                                    llm_retries=self.retries, llm_failures=self.failures)
+                                    llm_retries=self.retries, llm_failures=self.failures,
+                                    failed_categories=list(self.failed_categories))
 
     def _ask(self, category: C, evidence: list[EvidenceItem],
              coverage: dict[str, int], kinds: list[str]) -> _RawResponse:
@@ -131,6 +134,7 @@ class ImplementationExtractionAgent:
                 if attempt == 0:
                     self.retries += 1
         self.failures += 1
+        self.failed_categories.append(category.value)
         return _RawResponse(facts=[])  # fail soft; Agent 3 treats missing facts as unverifiable
 
     @staticmethod
