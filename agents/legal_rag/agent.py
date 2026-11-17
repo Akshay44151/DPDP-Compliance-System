@@ -2,10 +2,12 @@
 
 import json
 import re
+from dataclasses import replace
 from typing import Any
 
 from agents.alignment_agent.schemas import AlignmentStatus
 from agents.legal_rag.retriever import LegalRetriever
+from llm.groq_client import MalformedJSONError, ResponseSchemaError
 from agents.legal_rag.schemas import (
     LegalAnalysisRequest,
     LegalAnalysisResult,
@@ -97,10 +99,12 @@ class LegalAnalysisAgent:
     def __init__(self, llm_client=None, retriever=None):
         if llm_client is None:
             from llm.groq_client import GroqLLMClient
-            llm_client = GroqLLMClient()
+            from llm.config import get_llm_config
+            config = replace(get_llm_config(), max_retries=0)
+            llm_client = GroqLLMClient(config=config)
 
         self.llm_client = llm_client
-        self.retriever = retriever or LegalRetriever()
+        self.retriever = retriever if retriever is not None else LegalRetriever()
 
     def run(self, request: LegalAnalysisRequest) -> LegalAnalysisResult:
         implementation = request.implementation_report
@@ -108,10 +112,23 @@ class LegalAnalysisAgent:
         evidence_by_id = {item.id: item for item in implementation.evidence}
         findings = []
         consulted = set()
+        failed_calls = []
 
         for alignment in request.alignment_result.findings:
             if alignment.status == AlignmentStatus.OUT_OF_SCOPE:
                 findings.append(self.not_applicable(alignment.id))
+                continue
+
+            if alignment.status in {
+                AlignmentStatus.UNVERIFIABLE,
+                AlignmentStatus.UNDECLARED,
+                AlignmentStatus.INSUFFICIENT_EVIDENCE,
+            }:
+                findings.append(self.insufficient(
+                    alignment.id,
+                    f"Agent 3 status '{alignment.status.value}' does not support a legal assessment.",
+                    ["No legal LLM assessment was attempted for this finding."],
+                ))
                 continue
 
             fact_ids = [
@@ -164,7 +181,8 @@ class LegalAnalysisAgent:
 
             findings.append(
                 self.assess_one(
-                    alignment, facts, evidence_ids, chunks, evidence_by_id
+                    alignment, facts, evidence_ids, chunks, evidence_by_id,
+                    failed_calls,
                 )
             )
 
@@ -176,9 +194,11 @@ class LegalAnalysisAgent:
             findings=findings,
             summary=counts,
             sources_consulted=sorted(consulted),
+            failed_calls=failed_calls,
         )
 
-    def assess_one(self, alignment, facts, evidence_ids, chunks, evidence_by_id):
+    def assess_one(self, alignment, facts, evidence_ids, chunks, evidence_by_id,
+                   failed_calls):
         payload = {
             "alignment_finding": alignment.model_dump(mode="json"),
             "implementation_facts": [
@@ -201,50 +221,89 @@ class LegalAnalysisAgent:
             + "\n</ASSESSMENT_DATA>"
         )
 
-        try:
-            raw = self.llm_client.generate(
-                system_prompt=SYSTEM_PROMPT,
-                user_prompt=user_prompt,
-                response_schema=RESPONSE_SCHEMA,
-            )
+        for attempt in (1, 2):
+            try:
+                raw = self.llm_client.generate(
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=user_prompt,
+                    response_schema=RESPONSE_SCHEMA,
+                )
+            except (MalformedJSONError, ResponseSchemaError) as exc:
+                failed_calls.append({
+                    "alignment_finding_id": alignment.id,
+                    "attempt": attempt,
+                    "error_type": type(exc).__name__,
+                })
+                if attempt == 1:
+                    continue
+                return self.insufficient(
+                    alignment.id,
+                    "Legal assessment response failed validation twice.",
+                    ["The model response did not satisfy Agent 4 validation."],
+                )
+            except Exception as exc:
+                failed_calls.append({
+                    "alignment_finding_id": alignment.id,
+                    "attempt": attempt,
+                    "error_type": type(exc).__name__,
+                })
+                return self.insufficient(
+                    alignment.id,
+                    f"Legal LLM call failed: {type(exc).__name__}.",
+                    ["The legal assessment call failed; no legal conclusion was made."],
+                )
 
-            data = json.loads(raw)
+            try:
+                data = json.loads(raw)
 
-            allowed_fact_ids = {fact.id for fact in facts}
-            if not set(data["evidence_fact_ids"]).issubset(allowed_fact_ids):
-                raise ValueError("Unknown implementation fact ID returned.")
+                allowed_fact_ids = {fact.id for fact in facts}
+                if not set(data["evidence_fact_ids"]).issubset(allowed_fact_ids):
+                    raise ValueError("Unknown implementation fact ID returned.")
 
-            citations = [
-                LegalCitation.model_validate(item)
-                for item in data["citations"]
-            ]
-            self.validate_citations(citations, chunks)
+                citations = [
+                    LegalCitation.model_validate(item)
+                    for item in data["citations"]
+                ]
+                self.validate_citations(citations, chunks)
 
-            status = LegalAssessmentStatus(data["status"])
+                status = LegalAssessmentStatus(data["status"])
 
-            if status in {
-                LegalAssessmentStatus.POTENTIAL_COMPLIANCE,
-                LegalAssessmentStatus.POTENTIAL_NON_COMPLIANCE,
-            } and not citations:
-                raise ValueError("A legal conclusion requires a citation.")
+                if status in {
+                    LegalAssessmentStatus.POTENTIAL_COMPLIANCE,
+                    LegalAssessmentStatus.POTENTIAL_NON_COMPLIANCE,
+                } and not citations:
+                    raise ValueError("A legal conclusion requires a citation.")
 
-            return LegalFinding(
-                alignment_finding_id=alignment.id,
-                status=status,
-                applicable_provisions=data["applicable_provisions"],
-                legal_reasoning=data["legal_reasoning"],
-                evidence_fact_ids=data["evidence_fact_ids"],
-                citations=citations,
-                confidence=data["confidence"],
-                limitations=data["limitations"],
-            )
+                return LegalFinding(
+                    alignment_finding_id=alignment.id,
+                    status=status,
+                    applicable_provisions=data["applicable_provisions"],
+                    legal_reasoning=data["legal_reasoning"],
+                    evidence_fact_ids=data["evidence_fact_ids"],
+                    citations=citations,
+                    confidence=data["confidence"],
+                    limitations=data["limitations"],
+                )
 
-        except Exception as exc:
-            return self.insufficient(
-                alignment.id,
-                f"Legal assessment could not be validated: {type(exc).__name__}.",
-                ["The model response was invalid or unsupported by retrieved sources."],
-            )
+            except Exception as exc:
+                failed_calls.append({
+                    "alignment_finding_id": alignment.id,
+                    "attempt": attempt,
+                    "error_type": type(exc).__name__,
+                })
+                if attempt == 1:
+                    continue
+                return self.insufficient(
+                    alignment.id,
+                    "Legal assessment could not be validated after two attempts.",
+                    ["The model response was invalid or unsupported by retrieved sources."],
+                )
+
+        return self.insufficient(
+            alignment.id,
+            "Legal assessment could not be completed.",
+            ["No validated legal assessment was produced."],
+        )
 
     @staticmethod
     def validate_citations(citations, chunks):

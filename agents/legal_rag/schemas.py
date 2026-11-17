@@ -58,6 +58,16 @@ class LegalFinding(BaseModel):
     limitations: list[str] = Field(default_factory=list)
 
 
+class FailedLLMCall(BaseModel):
+    """A failed Agent 4 LLM call or response-validation attempt."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    alignment_finding_id: str
+    attempt: int = Field(ge=1)
+    error_type: str
+
+
 class LegalAnalysisResult(BaseModel):
     """Complete structured output from Agent 4 for Agent 5."""
 
@@ -66,6 +76,7 @@ class LegalAnalysisResult(BaseModel):
     findings: list[LegalFinding]
     summary: dict[str, int] = Field(default_factory=dict)
     sources_consulted: list[str] = Field(default_factory=list)
+    failed_calls: list[FailedLLMCall] = Field(default_factory=list)
 
 
 class LegalAnalysisRequest(BaseModel):

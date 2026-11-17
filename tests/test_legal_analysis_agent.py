@@ -178,3 +178,101 @@ def test_out_of_scope_finding_does_not_call_llm_or_retriever():
     result = agent.run(make_request(status=AlignmentStatus.OUT_OF_SCOPE))
 
     assert result.findings[0].status == LegalAssessmentStatus.NOT_APPLICABLE
+
+
+
+class SequenceLLM:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    def generate(self, **kwargs):
+        self.calls += 1
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return json.dumps(response)
+
+
+def test_forced_statuses_skip_llm_and_retriever():
+    class MustNotBeCalled:
+        def retrieve(self, *args, **kwargs):
+            raise AssertionError("Retriever should not be called")
+
+        def generate(self, **kwargs):
+            raise AssertionError("LLM should not be called")
+
+    forced_statuses = [
+        AlignmentStatus.UNVERIFIABLE,
+        AlignmentStatus.UNDECLARED,
+        AlignmentStatus.INSUFFICIENT_EVIDENCE,
+    ]
+
+    for status in forced_statuses:
+        agent = LegalAnalysisAgent(
+            llm_client=MustNotBeCalled(),
+            retriever=MustNotBeCalled(),
+        )
+
+        result = agent.run(make_request(status=status))
+
+        assert result.findings[0].status == LegalAssessmentStatus.INSUFFICIENT_EVIDENCE
+        assert result.failed_calls == []
+
+
+def test_validation_failure_then_successful_retry():
+    invalid_response = valid_response()
+    invalid_response["citations"][0]["excerpt"] = "Fabricated legal text."
+
+    llm = SequenceLLM([invalid_response, valid_response()])
+
+    agent = LegalAnalysisAgent(
+        llm_client=llm,
+        retriever=FakeRetriever([make_chunk()]),
+    )
+
+    result = agent.run(make_request())
+
+    assert llm.calls == 2
+    assert result.findings[0].status == LegalAssessmentStatus.POTENTIAL_NON_COMPLIANCE
+    assert len(result.failed_calls) == 1
+    assert result.failed_calls[0].alignment_finding_id == "A1"
+    assert result.failed_calls[0].attempt == 1
+    assert result.failed_calls[0].error_type == "ValueError"
+
+
+def test_two_validation_failures_return_insufficient_evidence():
+    invalid_response = valid_response()
+    invalid_response["citations"][0]["excerpt"] = "Fabricated legal text."
+
+    llm = SequenceLLM([invalid_response, invalid_response])
+
+    agent = LegalAnalysisAgent(
+        llm_client=llm,
+        retriever=FakeRetriever([make_chunk()]),
+    )
+
+    result = agent.run(make_request())
+
+    assert llm.calls == 2
+    assert result.findings[0].status == LegalAssessmentStatus.INSUFFICIENT_EVIDENCE
+    assert [call.attempt for call in result.failed_calls] == [1, 2]
+    assert all(call.error_type == "ValueError" for call in result.failed_calls)
+
+
+def test_api_failure_is_recorded_without_retry():
+    llm = SequenceLLM([RuntimeError("Network connection failed")])
+
+    agent = LegalAnalysisAgent(
+        llm_client=llm,
+        retriever=FakeRetriever([make_chunk()]),
+    )
+
+    result = agent.run(make_request())
+
+    assert llm.calls == 1
+    assert result.findings[0].status == LegalAssessmentStatus.INSUFFICIENT_EVIDENCE
+    assert len(result.failed_calls) == 1
+    assert result.failed_calls[0].alignment_finding_id == "A1"
+    assert result.failed_calls[0].attempt == 1
+    assert result.failed_calls[0].error_type == "RuntimeError"
