@@ -1,20 +1,26 @@
-"""Agent 2: Implementation Extraction Agent.
+"""Agent 2: Implementation Extraction Agent (LangChain).
 
 Stage 1 (scanner.py): deterministic evidence from Django code.
-Stage 2 (this file): LLM turns evidence into per-category ImplementationFacts,
-validated with Pydantic, with evidence ids checked against the real scan.
+Stage 2 (this file): a LangChain chain (prompt | model.with_structured_output) turns evidence
+into per-category ImplementationFacts, validated with Pydantic, with evidence ids checked
+against the real scan.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Literal
 
-from pydantic import BaseModel, ValidationError
+from groq import BadRequestError
+from langchain_core.exceptions import OutputParserException
+from langchain_core.prompts import ChatPromptTemplate
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from agents.implementation_agent.scanner import scan_project
 from agents.implementation_agent.schemas import (EvidenceItem, ImplementationFact,
                                                  ImplementationReport)
 from agents.policy_agent.schemas import PolicyCategory as C
+from llm.langchain_model import get_langchain_model
 
 # Which evidence kinds are relevant to which policy category.
 CATEGORY_KINDS: dict[C, list[str]] = {
@@ -37,25 +43,58 @@ category. Describe what the code actually does. Rules:
 - If the evidence shows something is missing (e.g. coverage count is 0 for a relevant kind, \
 or data is written or emailed with no consent reference), emit a fact with fact_type "absent" or \
 "partial" and cite the nearest evidence (e.g. the data_write items), or none if there is none.
-- Keep each statement to one concrete sentence."""
+- Keep each statement to one concrete sentence.
+- Be concise: group related items into ONE fact (for example list all personal-data model fields \
+in a single statement, and all form inputs in another). One fact per distinct behaviour.
+- Never emit two facts that say the same thing, and emit at most 8 facts.
+- Emit an "absent" fact only for a control this category would normally need (one fact per missing \
+control), not one per evidence kind with a zero count.
+- Describe only observed behaviour. Do not speculate about intent or possible problems \
+(no "suggests", "likely", "potential").
+- An evidence item with an empty code snippet only shows that a file or name exists. Never infer \
+what a file contains, or that it is empty, from a missing snippet.
+- Be specific: in a fact about data sent to an external service, name the target URL or host from \
+the evidence; in a fact about a database write, list every field in its "fields" detail; in a fact \
+about an outbound email, give its subject; in a fact about a withdrawal or unsubscribe control, \
+name it.
+- If COVERAGE lists data_sharing with a count of 0, emit one "absent" fact stating that no code \
+sends personal data to external services."""
+
+
+HUMAN_PROMPT = "{task_input}"  # rendered evidence goes in as a variable, so code braces are safe
+
+# Failures that mean "the model's structured output was unusable"; anything else (auth, network,
+# rate limit) is a real error and is allowed to propagate.
+RETRYABLE = (OutputParserException, ValidationError, BadRequestError)
 
 
 class _RawFact(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # all fields required: strict-schema friendly
+
     statement: str
-    fact_type: str
-    evidence_ids: list[str] = []
-    confidence: float = 0.5
+    fact_type: Literal["present", "absent", "partial"]
+    evidence_ids: list[str]
+    confidence: float
 
 
 class _RawResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     facts: list[_RawFact]
 
 
 class ImplementationExtractionAgent:
-    def __init__(self, llm_client) -> None:
-        self.llm = llm_client  # anything with generate(*, system_prompt, user_prompt, response_schema=None)
+    def __init__(self, model=None) -> None:
+        self.model = model or get_langchain_model()
+        self.prompt = ChatPromptTemplate.from_messages(
+            [("system", SYSTEM_PROMPT), ("human", HUMAN_PROMPT)])
+        self.chain = self.prompt | self.model.with_structured_output(_RawResponse)
+        self.retries = 0
+        self.failures = 0
+        self.last_error: str | None = None
 
     def run(self, project_path: str | Path) -> ImplementationReport:
+        self.retries = self.failures = 0
         evidence, files, coverage = scan_project(project_path)
         by_id = {e.id: e for e in evidence}
         facts: list[ImplementationFact] = []
@@ -74,22 +113,24 @@ class ImplementationExtractionAgent:
                     confidence=min(max(rf.confidence, 0.0), 1.0),
                 ))
         return ImplementationReport(project_path=str(project_path), files_scanned=files,
-                                    coverage=coverage, evidence=evidence, facts=facts)
+                                    coverage=coverage, evidence=evidence, facts=facts,
+                                    llm_retries=self.retries, llm_failures=self.failures)
 
     def _ask(self, category: C, evidence: list[EvidenceItem],
              coverage: dict[str, int], kinds: list[str]) -> _RawResponse:
-        user_prompt = self._render(category, evidence, coverage, kinds)
-        schema = _RawResponse.model_json_schema()
+        task_input = self._render(category, evidence, coverage, kinds)
         last_err = ""
-        for _ in range(2):  # one retry on invalid JSON
-            prompt = user_prompt if not last_err else (
-                user_prompt + f"\n\nYour previous reply was invalid: {last_err}. Return valid JSON only.")
-            text = self.llm.generate(system_prompt=SYSTEM_PROMPT, user_prompt=prompt,
-                                     response_schema=schema)
+        for attempt in range(2):  # one retry when the structured output is unusable
+            text = task_input if not last_err else (
+                task_input + f"\n\nYour previous reply was invalid: {last_err}. "
+                "Return the required structured output only.")
             try:
-                return _RawResponse.model_validate(json.loads(text))
-            except (json.JSONDecodeError, ValidationError) as exc:
-                last_err = str(exc)[:200]
+                return _RawResponse.model_validate(self.chain.invoke({"task_input": text}))
+            except RETRYABLE as exc:
+                last_err = self.last_error = str(exc)[:200]
+                if attempt == 0:
+                    self.retries += 1
+        self.failures += 1
         return _RawResponse(facts=[])  # fail soft; Agent 3 treats missing facts as unverifiable
 
     @staticmethod
