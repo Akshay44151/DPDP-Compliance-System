@@ -10,6 +10,8 @@ Safeguards, so that a failure never looks like a clean result:
 - If Agent 2 produced no report, Agent 3 is skipped and logged as FAILED.
 - If some documents failed, or Agent 2 is incomplete, Agent 3 still runs
   but a warning entry says its "undeclared" findings may be wrong.
+- Exact duplicate claims are dropped before Agent 3, and each drop is
+  logged.
 
 The stages themselves handle retries. This function only decides what
 runs, in what order, and what is skipped.
@@ -20,6 +22,7 @@ from collections.abc import Callable
 
 from orchestrator.alignment_stage import STEP_NAME as ALIGNMENT_STEP
 from orchestrator.alignment_stage import run_alignment_stage
+from orchestrator.dedup import drop_duplicate_claims  # added: dedup step
 from orchestrator.implementation_stage import STEP_NAME as IMPLEMENTATION_STEP
 from orchestrator.implementation_stage import run_implementation_stage
 from orchestrator.interfaces import (
@@ -134,6 +137,9 @@ def run_analysis_stages(
         )
     if warnings:
         state.log(WARNING_STEP, StepStatus.COMPLETED, message=" ".join(warnings))
+
+    # Added: drop exact duplicate claims before Agent 3, logging each drop.
+    drop_duplicate_claims(state)
 
     run_alignment_stage(
         state,
