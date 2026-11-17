@@ -4,7 +4,9 @@ from orchestrator.sufficiency import (
     STATUS_TO_OUTCOME,
     Agent3Status,
     Outcome,
+    count_outcomes,
     outcome_for_status,
+    should_retry_alignment,
 )
 
 
@@ -19,6 +21,7 @@ def test_every_agent3_status_has_a_mapping():
         ("partial", Outcome.GAP),
         ("violated", Outcome.GAP),
         ("unverifiable", Outcome.INSUFFICIENT_EVIDENCE),
+        ("insufficient_evidence", Outcome.INSUFFICIENT_EVIDENCE),
         ("out_of_scope", Outcome.NOT_ASSESSED),
         ("undeclared", Outcome.INSUFFICIENT_EVIDENCE),
     ],
@@ -48,4 +51,39 @@ def test_status_values_match_agent3_strings():
         "unverifiable",
         "out_of_scope",
         "undeclared",
+        "insufficient_evidence",
     }
+
+
+def test_count_outcomes_counts_each_outcome():
+    counts = count_outcomes(
+        ["aligned", "aligned", "violated", "partial", "unverifiable", "out_of_scope"]
+    )
+    assert counts[Outcome.COMPLIANT] == 2
+    assert counts[Outcome.GAP] == 2
+    assert counts[Outcome.INSUFFICIENT_EVIDENCE] == 1
+    assert counts[Outcome.NOT_ASSESSED] == 1
+
+
+def test_count_outcomes_includes_zero_counts():
+    counts = count_outcomes(["aligned"])
+    assert set(counts) == set(Outcome)
+    assert counts[Outcome.GAP] == 0
+
+
+def test_count_outcomes_empty():
+    assert count_outcomes([]) == {outcome: 0 for outcome in Outcome}
+
+
+@pytest.mark.parametrize(
+    ("failures", "retries_done", "max_retries", "expected"),
+    [
+        (0, 0, 2, False),  # no model failure: nothing to retry
+        (1, 0, 2, True),  # failed, retries left
+        (1, 1, 2, True),  # failed, one retry left
+        (1, 2, 2, False),  # failed, no retries left
+        (3, 0, 0, False),  # retries disabled
+    ],
+)
+def test_should_retry_alignment(failures, retries_done, max_retries, expected):
+    assert should_retry_alignment(failures, retries_done, max_retries) == expected
