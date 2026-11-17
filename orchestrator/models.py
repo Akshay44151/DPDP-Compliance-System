@@ -5,13 +5,15 @@ These are validated containers, not agents. They describe:
   2. everything known about one assessment run (AssessmentState),
   3. an audit log of what the orchestrator did (StepRecord).
 
-Only Agent 1's real output (PolicyClaim) is included. Fields for Agents
-2 to 5 are added later, once their output formats are agreed with their
-owners. Nothing is guessed here.
+Agent 1's real output (PolicyClaim) is included. Agent 3's result is kept
+as a plain dictionary for now, so we do not import code that is not in
+main yet. Fields for the other agents are added later, once their output
+formats are agreed with their owners. Nothing is guessed here.
 """
 
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -79,6 +81,9 @@ class AssessmentState(BaseModel):
     request: AssessmentRequest
     policy_claims: list[PolicyClaim] = Field(default_factory=list)
     rejected_claims: list[PolicyClaim] = Field(default_factory=list)
+    # Agent 3's result as a plain dict (result.model_dump(mode="json")).
+    # None means the alignment step has not produced a result.
+    alignment_result: dict[str, Any] | None = None
     step_log: list[StepRecord] = Field(default_factory=list)
 
     def log(
