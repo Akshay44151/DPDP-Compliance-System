@@ -5,12 +5,13 @@ importing concrete agent classes. Tests can then pass in fakes, and a
 teammate's agent can be plugged in later without changing the
 orchestrator.
 
-Agent 1 has a real, agreed contract. Agent 3 has a contract that is OUR
-copy of what Person 2 described. We do not import their code, so nothing
-here depends on their branch. Contracts for Agents 2, 4 and 5 are added
-once their code is visible. Nothing is guessed.
+Agent 1 has a real, agreed contract. Agents 2 and 3 have contracts that
+are OUR copy of what Person 2's code shows. We do not import their code,
+so nothing here depends on their branch. Contracts for Agents 4 and 5 are
+added once their code is in main. Nothing is guessed.
 """
 
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from agents.policy_agent.schemas import PolicyExtractionResult
@@ -30,6 +31,29 @@ class PolicyExtractor(Protocol):
         document_text: str,
         source: str,
     ) -> ExtractionReport:
+        ...
+
+
+class ImplementationOutput(Protocol):
+    """The parts of Agent 2's report that the orchestrator reads."""
+
+    llm_retries: int   # calls that needed a second attempt
+    llm_failures: int  # calls that gave up; those categories have no facts
+    facts: list[Any]
+
+    def model_dump(self, *, mode: str = "python") -> dict[str, Any]:
+        ...
+
+
+@runtime_checkable
+class ImplementationAnalyzer(Protocol):
+    """Anything that can analyse a code project and report what it does.
+
+    ImplementationExtractionAgent (Agent 2) is expected to satisfy this.
+    It cannot rerun for one category, so a retry means a whole new run.
+    """
+
+    def run(self, project_path: str | Path) -> ImplementationOutput:
         ...
 
 
