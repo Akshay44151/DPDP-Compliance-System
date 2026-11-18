@@ -12,6 +12,7 @@ from orchestrator import analysis_stage
 from orchestrator.alignment_stage import STEP_NAME as ALIGNMENT_STEP
 from orchestrator.analysis_stage import WARNING_STEP, run_analysis_stages
 from orchestrator.implementation_stage import STEP_NAME as IMPLEMENTATION_STEP
+from orchestrator.gate_stage import STEP_NAME as GATE_STEP
 from orchestrator.models import (
     AssessmentRequest,
     AssessmentState,
@@ -160,8 +161,12 @@ def test_agent1_and_agent2_really_run_at_the_same_time(tmp_path):
         state, MeetingExtractor(), lambda: MeetingImplAgent(), AlignFactory()
     )
 
-    assert len(state.step_log) == 3
-    assert all(r.status == StepStatus.COMPLETED for r in state.step_log)
+    assert len([r for r in state.step_log if r.step != GATE_STEP]) == 3
+    assert all(
+        r.status == StepStatus.COMPLETED
+        for r in state.step_log
+        if r.step != GATE_STEP
+    )
 
 
 def test_agent2_failing_skips_agent3(tmp_path):
