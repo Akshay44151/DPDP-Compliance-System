@@ -90,6 +90,9 @@ class AssessmentState(BaseModel):
     # Agent 3's result as a plain dict (result.model_dump(mode="json")).
     # None means the alignment step has not produced a result.
     alignment_result: dict[str, Any] | None = None
+        # The evidence gate's decisions (GateResult.to_dict()).
+    # None means the gate did not run or crashed.
+    evidence_gate: dict[str, Any] | None = None
     step_log: list[StepRecord] = Field(default_factory=list)
 
     def log(
