@@ -128,9 +128,16 @@ class LegalAnalysisAgent:
                 findings.append(self.not_applicable(alignment.id))
                 continue
 
+            if alignment.status == AlignmentStatus.UNDECLARED:
+                findings.append(self.requires_review(
+                    alignment.id,
+                    "Agent 3 identified implementation behavior without a corresponding policy declaration.",
+                    ["Undeclared behavior requires human review; it is not evidence of compliance or non-compliance."],
+                ))
+                continue
+
             if alignment.status in {
                 AlignmentStatus.UNVERIFIABLE,
-                AlignmentStatus.UNDECLARED,
                 AlignmentStatus.INSUFFICIENT_EVIDENCE,
             }:
                 findings.append(self.insufficient(
@@ -161,6 +168,16 @@ class LegalAnalysisAgent:
                 continue
 
             facts = [facts_by_id[fid] for fid in fact_ids]
+
+            # Agent 2's report does not establish scan completeness. An
+            # absence-only finding therefore cannot support a legal verdict.
+            if all(fact.fact_type == "absent" for fact in facts):
+                findings.append(self.requires_review(
+                    alignment.id,
+                    "The linked implementation facts report absence only, but the scan contract does not establish complete coverage.",
+                    ["Absence-only evidence is insufficient to establish a legal breach or compliance. Human review and additional verification are required."],
+                ))
+                continue
 
             evidence_ids = sorted({
                 evidence_id
@@ -355,7 +372,18 @@ class LegalAnalysisAgent:
             ):
                 raise ValueError("Citation metadata does not match its source.")
 
-            if normalise(citation.excerpt) not in normalise(chunk.text):
+            excerpt = normalise(citation.excerpt)
+            if not excerpt:
+                raise ValueError("Citation excerpt cannot be empty or whitespace-only.")
+
+            if not all((
+                citation.source_file.strip(),
+                citation.document_type.strip(),
+                citation.provision.strip(),
+            )):
+                raise ValueError("Citation metadata cannot be empty.")
+
+            if excerpt not in normalise(chunk.text):
                 raise ValueError("Citation excerpt is not in the retrieved passage.")
 
     @staticmethod
@@ -365,6 +393,15 @@ class LegalAnalysisAgent:
             status=LegalAssessmentStatus.NOT_APPLICABLE,
             legal_reasoning="This finding is outside the project's defined assessment scope.",
             limitations=["No legal conclusion was attempted for this finding."],
+        )
+
+    @staticmethod
+    def requires_review(alignment_id, reasoning, limitations):
+        return LegalFinding(
+            alignment_finding_id=alignment_id,
+            status=LegalAssessmentStatus.REQUIRES_REVIEW,
+            legal_reasoning=reasoning,
+            limitations=limitations,
         )
 
     @staticmethod

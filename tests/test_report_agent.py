@@ -69,7 +69,7 @@ def test_report_contains_findings_recommendations_and_score():
     assert report.sources_consulted == ["dpdp_act.pdf"]
     assert "not legal advice" in report.disclaimer
     assert "50.00%" in report.executive_summary
-    assert "1 findings require review" in report.executive_summary
+    assert "1 require review" in report.executive_summary
     assert len(report.failed_calls) == 1
     assert report.failed_calls[0].error_type == "RateLimitError"
     assert len(report.retrieval_failures) == 1
@@ -101,6 +101,6 @@ def test_report_handles_missing_score():
 
     assert report.recommendations == []
     assert report.score.score is None
-    assert "No provisional compliance score" in report.executive_summary
-    assert "coverage: unavailable" in report.executive_summary.lower()
+    assert "The provisional score was withheld" in report.executive_summary
+    assert "Assessment coverage: unavailable" in report.executive_summary
     assert report.failed_calls == []

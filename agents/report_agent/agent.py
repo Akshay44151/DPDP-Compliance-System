@@ -1,4 +1,4 @@
-﻿from agents.legal_rag.schemas import LegalAnalysisResult, LegalAssessmentStatus as S
+from agents.legal_rag.schemas import LegalAnalysisResult, LegalAssessmentStatus as S
 from agents.report_agent.schemas import (
     ComplianceReport,
     ReportGenerationRequest,
@@ -11,7 +11,9 @@ class ReportGenerationAgent:
 
     DISCLAIMER = (
         "This report is an automated informational assessment, not legal advice "
-        "or a legal certification. Findings should be reviewed by qualified personnel."
+        "or a legal certification. Its provisional score is not an overall DPDP "
+        "compliance percentage. Findings and source citations should be reviewed "
+        "by qualified personnel."
     )
 
     def generate(self, request: ReportGenerationRequest) -> ComplianceReport:
@@ -51,35 +53,44 @@ class ReportGenerationAgent:
                     reason=finding.legal_reasoning,
                 ))
 
-        coverage = request.score.assessment_coverage_percent
+        score = request.score
         coverage_text = (
-            f"{coverage:.2f}%"
-            if coverage is not None
+            f"{score.assessment_coverage_percent:.2f}%"
+            if score.assessment_coverage_percent is not None
             else "unavailable"
         )
 
-        review_count = request.score.requires_review_count
+        failure_text = (
+            f" Recorded failures: {len(analysis.failed_calls)} failed LLM calls "
+            f"and {len(analysis.retrieval_failures)} retrieval failures."
+        )
 
-        if request.score.score is None:
+        if score.score is None:
+            reason = score.score_withheld_reason or (
+                "No provisional score was supplied."
+            )
             summary = (
-                "No provisional compliance score could be calculated because "
-                "there were no findings with an assessable outcome. "
+                f"The provisional score was withheld. Reason: {reason} "
                 f"Assessment coverage: {coverage_text}. "
-                f"{review_count} findings require review."
+                f"{score.assessed_findings} findings were legally assessed; "
+                f"{score.requires_review_count} require review and "
+                f"{score.insufficient_evidence_count} have insufficient evidence."
+                f"{failure_text}"
             )
         else:
             summary = (
-                f"The provisional assessment score is {request.score.score:.2f}% "
-                f"with assessment coverage of {coverage_text}, based on "
-                f"{request.score.assessed_findings} assessable findings. "
-                f"{review_count} findings require review. "
-                f"{request.score.insufficient_evidence_count} findings have "
-                "insufficient evidence and are excluded from the score."
+                f"The provisional assessed-findings indicator is {score.score:.2f}%. "
+                "It is not an overall DPDP compliance percentage. "
+                f"Assessment coverage: {coverage_text}. "
+                f"{score.assessed_findings} findings were legally assessed; "
+                f"{score.requires_review_count} require review and "
+                f"{score.insufficient_evidence_count} have insufficient evidence."
+                f"{failure_text}"
             )
 
         return ComplianceReport(
             assessment_id=request.assessment_id,
-            score=request.score,
+            score=score,
             findings=analysis.findings,
             recommendations=recommendations,
             sources_consulted=analysis.sources_consulted,

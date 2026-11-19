@@ -1,12 +1,14 @@
-﻿from __future__ import annotations
+﻿
+from __future__ import annotations
 
 import hashlib
 import re
+from collections import Counter
 from pathlib import Path
 
 import pymupdf
-from langchain_core.documents import Document
 from langchain_chroma import Chroma
+from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -18,46 +20,59 @@ CHROMA_DIR = PROJECT_ROOT / "knowledge_base" / "chroma_db"
 COLLECTION_NAME = "dpdp_legal_sources"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-# Only these official primary legal documents are ingested.
+SCHEDULE_NAMES = (
+    "FIRST",
+    "SECOND",
+    "THIRD",
+    "FOURTH",
+    "FIFTH",
+    "SIXTH",
+    "SEVENTH",
+)
+
 LEGAL_SOURCES = [
     {
         "filename": "2bf1f0e9f04e6fb4f8fef35e82c42aa5.pdf",
         "document_type": "DPDP Act, 2023",
         "authority": "primary",
-        "pages": None,  # None means all pages.
+        "pages": None,
     },
     {
         "filename": "DPDP_Rules_2025_English_only (1).pdf",
         "document_type": "DPDP Rules, 2025",
         "authority": "primary",
-        # Zero-based PDF indexes: pages 1, 3, 5, ..., 17.
-        "pages": list(range(0, 18, 2)),
+        "pages": None,
     },
 ]
 
 
 def extract_pdf_pages(source: dict) -> list[Document]:
-    """Extract selected PDF pages and retain their original page numbers."""
+    """Extract PDF pages and preserve original page numbers."""
     pdf_path = LEGAL_DOCS_DIR / source["filename"]
 
     if not pdf_path.exists():
         raise FileNotFoundError(f"Legal document not found: {pdf_path}")
 
-    documents = []
+    documents: list[Document] = []
 
     with pymupdf.open(pdf_path) as pdf:
         selected_pages = source["pages"]
         page_indexes = (
-            selected_pages if selected_pages is not None
+            selected_pages
+            if selected_pages is not None
             else range(len(pdf))
         )
 
-        for page_index in page_indexes:
-            if page_index >= len(pdf):
-                continue
+        print(f"PDF pages available: {len(pdf)}")
 
-            page = pdf[page_index]
-            text = page.get_text("text").strip()
+        for page_index in page_indexes:
+            if page_index < 0 or page_index >= len(pdf):
+                raise ValueError(
+                    f"Invalid page index {page_index} "
+                    f"for {source['filename']}"
+                )
+
+            text = pdf[page_index].get_text("text").strip()
 
             if not text:
                 print(
@@ -82,38 +97,95 @@ def extract_pdf_pages(source: dict) -> list[Document]:
     return documents
 
 
+def _find_provision_markers(
+    page_text: str,
+    document_type: str,
+    active_provision: str = "not_identified",
+) -> list[tuple[int, str]]:
+    """Find main Act Sections, Rules, and Schedule headings."""
+    markers: list[tuple[int, str]] = []
+    is_act = "Act" in document_type
+
+    if is_act and re.search(
+        r"(?im)^\s*THE\s+SCHEDULE\s*$",
+        page_text,
+    ):
+        return [(0, "Schedule")]
+
+    in_schedule = active_provision.endswith("Schedule")
+
+    schedule_pattern = re.compile(
+        r"^(?:THE\s+)?("
+        + "|".join(SCHEDULE_NAMES)
+        + r")\s+SCHEDULE$",
+        re.IGNORECASE,
+    )
+    heading_pattern = re.compile(r"^(\d{1,2})\.\s*(\S.*)$")
+
+    offset = 0
+
+    for raw_line in page_text.splitlines(keepends=True):
+        line = raw_line.strip()
+
+        if line:
+            schedule_match = schedule_pattern.fullmatch(line)
+
+            if schedule_match:
+                schedule_name = schedule_match.group(1).title()
+                markers.append((offset, f"{schedule_name} Schedule"))
+                in_schedule = True
+
+            elif not in_schedule:
+                heading_match = heading_pattern.match(line)
+
+                if heading_match:
+                    number = int(heading_match.group(1))
+                    heading = heading_match.group(2).strip()[:120]
+
+                    if is_act and 1 <= number <= 44:
+                        markers.append(
+                            (offset, f"Section {number}: {heading}")
+                        )
+                    elif not is_act and 1 <= number <= 23:
+                        markers.append(
+                            (offset, f"Rule {number}: {heading}")
+                        )
+
+        offset += len(raw_line)
+
+    return markers
+
 def identify_provision(
     page_text: str,
     document_type: str,
     chunk_start: int,
+    active_provision: str = "not_identified",
 ) -> str:
-    """Find the provision heading governing a chunk using its page position."""
-    headings = list(re.finditer(
-        r"(?m)^\s*(\d{1,2})\.\s*([^\n]{0,120})",
+    """Identify the provision governing a position in a page."""
+    markers = _find_provision_markers(
         page_text,
-    ))
+        document_type,
+        active_provision,
+    )
 
-    preceding = [
-        match for match in headings
-        if match.start() <= chunk_start
-    ]
+    provision = active_provision
 
-    if preceding:
-        match = preceding[-1]
-    elif headings and headings[0].start() < 200:
-        # Handle page headers that appear before the first provision heading.
-        match = headings[0]
-    else:
-        return "not_identified"
-    number = match.group(1)
-    heading = match.group(2).strip()
+    for position, label in markers:
+        if position > chunk_start:
+            break
+        provision = label
 
-    prefix = "Section" if "Act" in document_type else "Rule"
-    return f"{prefix} {number}: {heading}"
+    return provision
 
 
 def split_legal_pages(pages: list[Document]) -> list[Document]:
-    """Split pages while preserving the correct provision heading."""
+    """
+    Split each page at provision boundaries first, then into chunks.
+
+    This prevents a single chunk from being labelled with only one
+    provision when it actually contains multiple Section or Rule
+    headings.
+    """
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=150,
@@ -121,18 +193,73 @@ def split_legal_pages(pages: list[Document]) -> list[Document]:
         separators=["\n\n", "\n", ". ", " ", ""],
     )
 
-    chunks = []
+    chunks: list[Document] = []
+    active_provisions: dict[str, str] = {}
 
     for page in pages:
-        page_chunks = splitter.split_documents([page])
+        document_type = page.metadata["document_type"]
+        active = active_provisions.get(
+            document_type,
+            "not_identified",
+        )
 
-        for chunk in page_chunks:
-            chunk.metadata["provision"] = identify_provision(
-                page.page_content,
-                page.metadata["document_type"],
-                chunk.metadata.get("start_index", 0),
+        markers = _find_provision_markers(
+            page.page_content,
+            document_type,
+            active,
+        )
+
+        # Label text before the first identified provision as Preamble.
+        if (
+            active == "not_identified"
+            and (not markers or markers[0][0] > 0)
+        ):
+            active = "Preamble"
+
+        boundaries: list[tuple[int, str]] = [(0, active)]
+        boundaries.extend(markers)
+
+        # Remove duplicate positions while preserving the last label
+        # at each position.
+        position_labels: dict[int, str] = {}
+        for position, label in boundaries:
+            position_labels[position] = label
+
+        ordered_boundaries = sorted(position_labels.items())
+        page_length = len(page.page_content)
+
+        for index, (start, provision) in enumerate(ordered_boundaries):
+            end = (
+                ordered_boundaries[index + 1][0]
+                if index + 1 < len(ordered_boundaries)
+                else page_length
             )
-            chunks.append(chunk)
+
+            segment_text = page.page_content[start:end].strip()
+
+            if not segment_text:
+                continue
+
+            segment = Document(
+                page_content=segment_text,
+                metadata=dict(page.metadata),
+            )
+
+            segment_chunks = splitter.split_documents([segment])
+
+            for chunk in segment_chunks:
+                local_start = chunk.metadata.get("start_index", 0)
+
+                chunk.metadata["start_index"] = (
+                    start + local_start
+                )
+                chunk.metadata["provision"] = provision
+                chunks.append(chunk)
+
+        if markers:
+            active = markers[-1][1]
+
+        active_provisions[document_type] = active
 
     return chunks
 
@@ -145,20 +272,207 @@ def create_embeddings() -> HuggingFaceEmbeddings:
     )
 
 
-def stable_chunk_id(document: Document, index: int) -> str:
-    """Create a repeatable ID for each source page and chunk."""
-    identity = (
-        f"{document.metadata['source_file']}|"
-        f"{document.metadata['pdf_page']}|"
-        f"{document.metadata.get('start_index', 0)}|"
-        f"{index}"
+def stable_chunk_id(document: Document) -> str:
+    """Create a deterministic ID from chunk content and its metadata."""
+    identity = "|".join(
+        [
+            document.metadata["source_file"],
+            str(document.metadata["pdf_page"]),
+            str(document.metadata.get("start_index", 0)),
+            str(sorted(document.metadata.items())),
+            hashlib.sha256(document.page_content.encode("utf-8")).hexdigest(),
+        ]
     )
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
-def ingest_legal_documents() -> None:
-    CHROMA_DIR.mkdir(parents=True, exist_ok=True)
+def get_existing_source_ids(
+    vector_store: Chroma,
+    filename: str,
+) -> set[str]:
+    """Get existing vector IDs for one source PDF."""
+    result = vector_store.get(
+        where={"source_file": filename},
+        include=[],
+    )
+    return set(result.get("ids", []))
 
+
+def safely_replace_source_chunks(
+    vector_store: Chroma,
+    filename: str,
+    chunks: list[Document],
+) -> None:
+    """
+    Add replacement chunks before deleting stale chunks.
+
+    If adding fails, remove newly introduced IDs and preserve
+    the previous source vectors.
+    """
+    old_ids = get_existing_source_ids(vector_store, filename)
+    new_ids = [stable_chunk_id(chunk) for chunk in chunks]
+
+    if len(new_ids) != len(set(new_ids)):
+        raise ValueError(
+            f"Duplicate chunk IDs generated for {filename}"
+        )
+
+    try:
+        vector_store.add_documents(
+            documents=chunks,
+            ids=new_ids,
+        )
+    except Exception:
+        rollback_ids = [
+            chunk_id
+            for chunk_id in new_ids
+            if chunk_id not in old_ids
+        ]
+
+        if rollback_ids:
+            try:
+                vector_store.delete(ids=rollback_ids)
+            except Exception as rollback_error:
+                print(
+                    "WARNING: Rollback failed. "
+                    f"Some new vectors may remain: {rollback_error}"
+                )
+
+        raise
+
+    stale_ids = sorted(old_ids - set(new_ids))
+
+    if stale_ids:
+        vector_store.delete(ids=stale_ids)
+
+    print(f"Previous chunks found: {len(old_ids)}")
+    print(f"Replacement chunks added: {len(new_ids)}")
+    print(f"Old chunks removed: {len(stale_ids)}")
+
+
+def report_source(
+    source: dict,
+    pages: list[Document],
+    chunks: list[Document],
+) -> None:
+    """Report extracted pages and provision labels."""
+    page_numbers = sorted(
+        page.metadata["pdf_page"] for page in pages
+    )
+
+    provision_counts = Counter(
+        chunk.metadata.get("provision", "not_identified")
+        for chunk in chunks
+    )
+
+    print(f"Pages extracted: {len(pages)}")
+    print(f"PDF page numbers extracted: {page_numbers}")
+    print(f"Chunks generated: {len(chunks)}")
+    print("Provision labels:")
+
+    for provision, count in sorted(provision_counts.items()):
+        print(f"  {provision}: {count} chunks")
+
+
+def validate_source_chunks(
+    source: dict,
+    pages: list[Document],
+    chunks: list[Document],
+) -> None:
+    """Reject incomplete or unidentified legal source extraction."""
+    if not pages or not chunks:
+        raise RuntimeError(
+            f"No usable pages or chunks extracted from {source['filename']}"
+        )
+
+    page_numbers = sorted({
+        int(page.metadata["pdf_page"]) for page in pages
+    })
+    if page_numbers != list(range(1, len(pages) + 1)):
+        raise RuntimeError(
+            f"Non-contiguous PDF pages in {source['filename']}: {page_numbers}"
+        )
+
+    labels = {chunk.metadata.get("provision", "not_identified") for chunk in chunks}
+
+    if "not_identified" in labels:
+        raise RuntimeError(
+            f"Unidentified legal chunks remain in {source['filename']}"
+        )
+
+    if "Preamble" not in labels:
+        raise RuntimeError(
+            f"Preamble was not identified in {source['filename']}"
+        )
+
+    document_type = source["document_type"]
+
+    if "Act" in document_type:
+        expected = {f"Section {number}:" for number in range(1, 45)}
+        actual = {
+            label.split(":", 1)[0] + ":"
+            for label in labels
+            if label.startswith("Section ")
+        }
+        missing = expected - actual
+
+        if missing:
+            raise RuntimeError(
+                f"Missing Act sections in {source['filename']}: "
+                f"{sorted(missing)}"
+            )
+
+        if "Schedule" not in labels:
+            raise RuntimeError(
+                f"Act Schedule not detected in {source['filename']}"
+            )
+
+    elif "Rules" in document_type:
+        expected = {f"Rule {number}:" for number in range(1, 24)}
+        actual = {
+            label.split(":", 1)[0] + ":"
+            for label in labels
+            if label.startswith("Rule ")
+        }
+        missing = expected - actual
+
+        if missing:
+            raise RuntimeError(
+                f"Missing Rules provisions in {source['filename']}: "
+                f"{sorted(missing)}"
+            )
+
+        expected_schedules = {
+            "First Schedule", "Second Schedule", "Third Schedule",
+            "Fourth Schedule", "Fifth Schedule", "Sixth Schedule",
+            "Seventh Schedule",
+        }
+        missing_schedules = expected_schedules - labels
+
+        if missing_schedules:
+            raise RuntimeError(
+                f"Missing Rules schedules in {source['filename']}: "
+                f"{sorted(missing_schedules)}"
+            )
+
+    print(f"Validation passed: {document_type}")
+    print(f"  Pages: {len(pages)}")
+    print(f"  Chunks: {len(chunks)}")
+
+
+def ingest_legal_documents() -> None:
+    # Extract and validate EVERY source before changing the vector database.
+    prepared_sources = []
+
+    for source in LEGAL_SOURCES:
+        print(f"\\nPreparing: {source['document_type']}")
+        pages = extract_pdf_pages(source)
+        chunks = split_legal_pages(pages)
+        validate_source_chunks(source, pages, chunks)
+        report_source(source, pages, chunks)
+        prepared_sources.append((source, chunks))
+
+    CHROMA_DIR.mkdir(parents=True, exist_ok=True)
     embeddings = create_embeddings()
 
     vector_store = Chroma(
@@ -169,39 +483,22 @@ def ingest_legal_documents() -> None:
 
     total_chunks = 0
 
-    for source in LEGAL_SOURCES:
-        print(f"\nProcessing: {source['document_type']}")
+    for source, chunks in prepared_sources:
+        filename = source["filename"]
+        print(f"\\nReplacing vectors for: {filename}")
 
-        pages = extract_pdf_pages(source)
-        chunks = split_legal_pages(pages)
-
-        if not chunks:
-            print("WARNING: No text chunks extracted.")
-            continue
-
-        # Replace only this source's previous chunks, making reruns safe.
-        vector_store.delete(
-            where={"source_file": source["filename"]}
+        safely_replace_source_chunks(
+            vector_store,
+            filename,
+            chunks,
         )
-
-        ids = [
-            stable_chunk_id(chunk, index)
-            for index, chunk in enumerate(chunks)
-        ]
-
-        vector_store.add_documents(
-            documents=chunks,
-            ids=ids,
-        )
-
         total_chunks += len(chunks)
 
-        print(f"Pages extracted: {len(pages)}")
-        print(f"Chunks stored: {len(chunks)}")
-
-    print("\nLegal document ingestion completed.")
+    print("\\n" + "=" * 60)
+    print("LEGAL DOCUMENT INGESTION COMPLETED")
+    print("=" * 60)
     print(f"Collection: {COLLECTION_NAME}")
-    print(f"New chunks processed: {total_chunks}")
+    print(f"Chunks processed: {total_chunks}")
     print(f"Total vectors in collection: {vector_store._collection.count()}")
     print(f"Database location: {CHROMA_DIR}")
 

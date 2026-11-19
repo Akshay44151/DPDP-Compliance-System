@@ -36,7 +36,7 @@ class FakeLLM:
         return json.dumps(self.response)
 
 
-def make_request(status=AlignmentStatus.VIOLATED, include_fact=True):
+def make_request(status=AlignmentStatus.VIOLATED, include_fact=True, fact_type='partial'):
     claim = PolicyClaim(
         claim="We obtain consent before processing personal data.",
         category=PolicyCategory.CONSENT,
@@ -65,8 +65,8 @@ def make_request(status=AlignmentStatus.VIOLATED, include_fact=True):
     fact = ImplementationFact(
         id="F1",
         category=PolicyCategory.CONSENT,
-        statement="User creation has no visible consent check.",
-        fact_type="absent",
+        statement="The consent control is present, but does not clearly record an affirmative consent action.",
+        fact_type=fact_type,
         evidence_ids=["E1"],
         locations=[CodeLocation(file="app.py", line=10)],
     )
@@ -90,32 +90,32 @@ def make_request(status=AlignmentStatus.VIOLATED, include_fact=True):
 
 def make_chunk():
     return RetrievedLegalChunk(
-        source_id="LEGAL-act-P8-R1",
-        text="The Data Fiduciary shall protect personal data in its possession or under its control.",
+        source_id="LEGAL-act-P6-R1",
+        text="The consent given by the Data Principal shall be free, specific, informed, unconditional and unambiguous with a clear affirmative action.",
         source_file="dpdp_act.pdf",
         document_type="act",
         authority="primary",
-        pdf_page=8,
-        provision="Section 8",
+        pdf_page=6,
+        provision="Section 6",
     )
 
 
 def valid_response():
     return {
         "status": "potential_non_compliance",
-        "applicable_provisions": ["Section 8"],
-        "legal_reasoning": "The retrieved passage establishes a duty to protect personal data. The supplied evidence requires further assessment against that duty.",
+        "applicable_provisions": ["Section 6"],
+        "legal_reasoning": "Section 6 requires consent to be free, specific, informed, unconditional and unambiguous, with a clear affirmative action.",
         "evidence_fact_ids": ["F1"],
         "citations": [{
-            "source_id": "LEGAL-act-P8-R1",
-            "provision": "Section 8",
+            "source_id": "LEGAL-act-P6-R1",
+            "provision": "Section 6",
             "document_type": "act",
             "source_file": "dpdp_act.pdf",
-            "pdf_page": 8,
-            "excerpt": "The Data Fiduciary shall protect personal data in its possession or under its control.",
+            "pdf_page": 6,
+            "excerpt": "The consent given by the Data Principal shall be free, specific, informed, unconditional and unambiguous with a clear affirmative action.",
         }],
         "confidence": 0.7,
-        "limitations": ["The retrieved passage does not establish every technical safeguard required."],
+        "limitations": ["The supplied implementation evidence does not establish every aspect of the consent process."],
     }
 
 
@@ -129,7 +129,7 @@ def test_legal_agent_returns_validated_finding():
 
     assert len(result.findings) == 1
     assert result.findings[0].status == LegalAssessmentStatus.POTENTIAL_NON_COMPLIANCE
-    assert result.findings[0].citations[0].provision == "Section 8"
+    assert result.findings[0].citations[0].provision == "Section 6"
     assert result.findings[0].evidence_fact_ids == ["F1"]
     assert result.sources_consulted == ["dpdp_act.pdf"]
 
@@ -216,9 +216,34 @@ def test_forced_statuses_skip_llm_and_retriever():
 
         result = agent.run(make_request(status=status))
 
-        assert result.findings[0].status == LegalAssessmentStatus.INSUFFICIENT_EVIDENCE
+        expected = (
+            LegalAssessmentStatus.REQUIRES_REVIEW
+            if status == AlignmentStatus.UNDECLARED
+            else LegalAssessmentStatus.INSUFFICIENT_EVIDENCE
+        )
+        assert result.findings[0].status == expected
         assert result.failed_calls == []
 
+
+
+def test_absence_only_fact_requires_review_without_llm_or_retrieval():
+    class MustNotBeCalled:
+        def retrieve(self, *args, **kwargs):
+            raise AssertionError("Retriever must not be called for absence-only evidence")
+
+        def generate(self, **kwargs):
+            raise AssertionError("LLM must not be called for absence-only evidence")
+
+    agent = LegalAnalysisAgent(
+        llm_client=MustNotBeCalled(),
+        retriever=MustNotBeCalled(),
+    )
+
+    result = agent.run(make_request(fact_type="absent"))
+
+    assert result.findings[0].status == LegalAssessmentStatus.REQUIRES_REVIEW
+    assert result.failed_calls == []
+    assert result.retrieval_failures == []
 
 def test_validation_failure_then_successful_retry():
     invalid_response = valid_response()

@@ -42,6 +42,20 @@ class LegalCitation(BaseModel):
     pdf_page: int = Field(ge=1)
     excerpt: str = Field(min_length=1)
 
+    @classmethod
+    def model_validate(cls, obj, **kwargs):
+        instance = super().model_validate(obj, **kwargs)
+        if not instance.excerpt.strip():
+            raise ValueError("Citation excerpt cannot be whitespace-only.")
+        if not all((
+            instance.source_id.strip(),
+            instance.provision.strip(),
+            instance.document_type.strip(),
+            instance.source_file.strip(),
+        )):
+            raise ValueError("Citation metadata fields cannot be empty.")
+        return instance
+
 
 class LegalFinding(BaseModel):
     """Legal assessment corresponding to one Agent 3 alignment finding."""

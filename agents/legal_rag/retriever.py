@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -14,14 +14,19 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 
 class LegalRetriever:
-    """Retrieve authoritative DPDP Act and Rules passages from ChromaDB."""
+    """Retrieve relevant authoritative DPDP Act and Rules passages."""
 
     def __init__(
         self,
         persist_directory: str | Path = CHROMA_DIR,
         collection_name: str = COLLECTION_NAME,
         embeddings=None,
+        relevance_threshold: float = 1.0,
     ) -> None:
+        if relevance_threshold < 0:
+            raise ValueError("relevance_threshold cannot be negative.")
+
+        self.relevance_threshold = float(relevance_threshold)
         self.persist_directory = Path(persist_directory)
 
         if not self.persist_directory.exists():
@@ -48,7 +53,7 @@ class LegalRetriever:
         *,
         k: int = 5,
     ) -> list[RetrievedLegalChunk]:
-        """Return the most relevant primary-source legal chunks."""
+        """Return primary-source passages within the configured distance."""
 
         if not query or not query.strip():
             raise ValueError("Search query cannot be empty.")
@@ -67,17 +72,43 @@ class LegalRetriever:
         for index, (document, distance) in enumerate(results, start=1):
             metadata = document.metadata
 
+            required = (
+                "source_file",
+                "document_type",
+                "authority",
+                "pdf_page",
+                "provision",
+            )
+            missing = [
+                key for key in required
+                if key not in metadata or metadata[key] is None
+                or (isinstance(metadata[key], str) and not metadata[key].strip())
+            ]
+            if missing:
+                raise ValueError(
+                    f"Retrieved legal document is missing metadata: {missing}"
+                )
+
+            if metadata["authority"] != "primary":
+                continue
+
+            distance = float(distance)
+            if distance > self.relevance_threshold:
+                continue
+
             chunks.append(
                 RetrievedLegalChunk(
-                    source_id=f"LEGAL-{metadata.get('source_file', 'unknown')}-"
-                              f"P{metadata.get('pdf_page', 0)}-R{index}",
+                    source_id=(
+                        f"LEGAL-{metadata['source_file']}-"
+                        f"P{int(metadata['pdf_page'])}-R{index}"
+                    ),
                     text=document.page_content,
-                    source_file=metadata.get("source_file", "unknown"),
-                    document_type=metadata.get("document_type", "unknown"),
-                    authority=metadata.get("authority", "unknown"),
-                    pdf_page=metadata.get("pdf_page", 1),
-                    provision=metadata.get("provision", "not_identified"),
-                    distance=float(distance),
+                    source_file=str(metadata["source_file"]),
+                    document_type=str(metadata["document_type"]),
+                    authority=str(metadata["authority"]),
+                    pdf_page=int(metadata["pdf_page"]),
+                    provision=str(metadata["provision"]),
+                    distance=distance,
                 )
             )
 

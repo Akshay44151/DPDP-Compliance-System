@@ -1,4 +1,4 @@
-﻿from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ComplianceScore(BaseModel):
@@ -15,4 +15,6 @@ class ComplianceScore(BaseModel):
     assessment_coverage_percent: float | None = Field(
         default=None, ge=0, le=100
     )
+    minimum_coverage_percent: float = Field(default=50.0, ge=0, le=100)
+    score_withheld_reason: str | None = None
     score_description: str
