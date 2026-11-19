@@ -47,7 +47,7 @@ LEGAL_SOURCES = [
 
 
 def extract_pdf_pages(source: dict) -> list[Document]:
-    """Extract PDF pages and preserve original page numbers."""
+    """Extract every requested PDF page without silently skipping pages."""
     pdf_path = LEGAL_DOCS_DIR / source["filename"]
 
     if not pdf_path.exists():
@@ -55,44 +55,79 @@ def extract_pdf_pages(source: dict) -> list[Document]:
 
     documents: list[Document] = []
 
-    with pymupdf.open(pdf_path) as pdf:
-        selected_pages = source["pages"]
-        page_indexes = (
-            selected_pages
-            if selected_pages is not None
-            else range(len(pdf))
-        )
+    try:
+        with pymupdf.open(pdf_path) as pdf:
+            total_pages = len(pdf)
 
-        print(f"PDF pages available: {len(pdf)}")
-
-        for page_index in page_indexes:
-            if page_index < 0 or page_index >= len(pdf):
-                raise ValueError(
-                    f"Invalid page index {page_index} "
-                    f"for {source['filename']}"
+            if total_pages == 0:
+                raise RuntimeError(
+                    f"PDF contains no pages: {source['filename']}"
                 )
 
-            text = pdf[page_index].get_text("text").strip()
+            selected_pages = source["pages"]
 
-            if not text:
-                print(
-                    f"WARNING: No extractable text on "
-                    f"{source['filename']}, page {page_index + 1}"
-                )
-                continue
-
-            documents.append(
-                Document(
-                    page_content=text,
-                    metadata={
-                        "source_file": source["filename"],
-                        "document_type": source["document_type"],
-                        "authority": source["authority"],
-                        "pdf_page": page_index + 1,
-                        "language": "English",
-                    },
-                )
+            page_indexes = (
+                list(range(total_pages))
+                if selected_pages is None
+                else list(selected_pages)
             )
+
+            if not page_indexes:
+                raise RuntimeError(
+                    f"No pages selected for {source['filename']}"
+                )
+
+            if len(page_indexes) != len(set(page_indexes)):
+                raise ValueError(
+                    f"Duplicate page indexes in {source['filename']}"
+                )
+
+            print(f"PDF pages available: {total_pages}")
+            print(f"Pages requested: {len(page_indexes)}")
+
+            for page_index in page_indexes:
+                if page_index < 0 or page_index >= total_pages:
+                    raise ValueError(
+                        f"Invalid page index {page_index} "
+                        f"for {source['filename']}"
+                    )
+
+                try:
+                    text = pdf[page_index].get_text("text").strip()
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Could not read {source['filename']}, "
+                        f"page {page_index + 1}: {exc}"
+                    ) from exc
+
+                if not text:
+                    raise RuntimeError(
+                        f"No extractable text on {source['filename']}, "
+                        f"page {page_index + 1}. "
+                        "Ingestion stopped to prevent silent page loss. "
+                        "OCR or manual inspection may be required."
+                    )
+
+                documents.append(
+                    Document(
+                        page_content=text,
+                        metadata={
+                            "source_file": source["filename"],
+                            "document_type": source["document_type"],
+                            "authority": source["authority"],
+                            "pdf_page": page_index + 1,
+                            "pdf_total_pages": total_pages,
+                            "language": "English",
+                        },
+                    )
+                )
+
+    except (FileNotFoundError, ValueError, RuntimeError):
+        raise
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to open or extract {source['filename']}: {exc}"
+        ) from exc
 
     return documents
 
@@ -155,6 +190,7 @@ def _find_provision_markers(
 
     return markers
 
+
 def identify_provision(
     page_text: str,
     document_type: str,
@@ -209,7 +245,6 @@ def split_legal_pages(pages: list[Document]) -> list[Document]:
             active,
         )
 
-        # Label text before the first identified provision as Preamble.
         if (
             active == "not_identified"
             and (not markers or markers[0][0] > 0)
@@ -219,9 +254,8 @@ def split_legal_pages(pages: list[Document]) -> list[Document]:
         boundaries: list[tuple[int, str]] = [(0, active)]
         boundaries.extend(markers)
 
-        # Remove duplicate positions while preserving the last label
-        # at each position.
         position_labels: dict[int, str] = {}
+
         for position, label in boundaries:
             position_labels[position] = label
 
@@ -250,10 +284,9 @@ def split_legal_pages(pages: list[Document]) -> list[Document]:
             for chunk in segment_chunks:
                 local_start = chunk.metadata.get("start_index", 0)
 
-                chunk.metadata["start_index"] = (
-                    start + local_start
-                )
+                chunk.metadata["start_index"] = start + local_start
                 chunk.metadata["provision"] = provision
+
                 chunks.append(chunk)
 
         if markers:
@@ -280,9 +313,12 @@ def stable_chunk_id(document: Document) -> str:
             str(document.metadata["pdf_page"]),
             str(document.metadata.get("start_index", 0)),
             str(sorted(document.metadata.items())),
-            hashlib.sha256(document.page_content.encode("utf-8")).hexdigest(),
+            hashlib.sha256(
+                document.page_content.encode("utf-8")
+            ).hexdigest(),
         ]
     )
+
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
@@ -295,6 +331,7 @@ def get_existing_source_ids(
         where={"source_file": filename},
         include=[],
     )
+
     return set(result.get("ids", []))
 
 
@@ -374,26 +411,79 @@ def report_source(
         print(f"  {provision}: {count} chunks")
 
 
+
 def validate_source_chunks(
     source: dict,
     pages: list[Document],
     chunks: list[Document],
 ) -> None:
-    """Reject incomplete or unidentified legal source extraction."""
+    """Reject incomplete, unreadable, or unidentified legal extraction."""
     if not pages or not chunks:
         raise RuntimeError(
             f"No usable pages or chunks extracted from {source['filename']}"
         )
 
-    page_numbers = sorted({
-        int(page.metadata["pdf_page"]) for page in pages
-    })
-    if page_numbers != list(range(1, len(pages) + 1)):
+    # Real PDF extraction records the actual total page count.
+    # Older test fixtures may not contain this metadata.
+    total_page_values = {
+        int(
+            page.metadata.get(
+                "pdf_total_pages",
+                max(int(item.metadata["pdf_page"]) for item in pages),
+            )
+        )
+        for page in pages
+    }
+
+    if len(total_page_values) != 1:
         raise RuntimeError(
-            f"Non-contiguous PDF pages in {source['filename']}: {page_numbers}"
+            f"Inconsistent PDF page counts in {source['filename']}"
         )
 
-    labels = {chunk.metadata.get("provision", "not_identified") for chunk in chunks}
+    total_pdf_pages = total_page_values.pop()
+
+    page_numbers = sorted(
+        int(page.metadata["pdf_page"]) for page in pages
+    )
+
+    selected_pages = source.get("pages")
+
+    expected_page_numbers = (
+        list(range(1, total_pdf_pages + 1))
+        if selected_pages is None
+        else sorted(int(index) + 1 for index in selected_pages)
+    )
+
+    if page_numbers != expected_page_numbers:
+        missing = sorted(set(expected_page_numbers) - set(page_numbers))
+        unexpected = sorted(set(page_numbers) - set(expected_page_numbers))
+
+        raise RuntimeError(
+            f"Non-contiguous or incomplete PDF pages in "
+            f"{source['filename']}. "
+            f"Missing pages: {missing}; unexpected pages: {unexpected}"
+        )
+
+    if len(page_numbers) != len(set(page_numbers)):
+        raise RuntimeError(
+            f"Duplicate extracted pages in {source['filename']}"
+        )
+
+    empty_pages = [
+        page.metadata["pdf_page"]
+        for page in pages
+        if not page.page_content.strip()
+    ]
+
+    if empty_pages:
+        raise RuntimeError(
+            f"Empty extracted pages in {source['filename']}: {empty_pages}"
+        )
+
+    labels = {
+        chunk.metadata.get("provision", "not_identified")
+        for chunk in chunks
+    }
 
     if "not_identified" in labels:
         raise RuntimeError(
@@ -409,11 +499,13 @@ def validate_source_chunks(
 
     if "Act" in document_type:
         expected = {f"Section {number}:" for number in range(1, 45)}
+
         actual = {
             label.split(":", 1)[0] + ":"
             for label in labels
             if label.startswith("Section ")
         }
+
         missing = expected - actual
 
         if missing:
@@ -429,11 +521,13 @@ def validate_source_chunks(
 
     elif "Rules" in document_type:
         expected = {f"Rule {number}:" for number in range(1, 24)}
+
         actual = {
             label.split(":", 1)[0] + ":"
             for label in labels
             if label.startswith("Rule ")
         }
+
         missing = expected - actual
 
         if missing:
@@ -443,10 +537,15 @@ def validate_source_chunks(
             )
 
         expected_schedules = {
-            "First Schedule", "Second Schedule", "Third Schedule",
-            "Fourth Schedule", "Fifth Schedule", "Sixth Schedule",
+            "First Schedule",
+            "Second Schedule",
+            "Third Schedule",
+            "Fourth Schedule",
+            "Fifth Schedule",
+            "Sixth Schedule",
             "Seventh Schedule",
         }
+
         missing_schedules = expected_schedules - labels
 
         if missing_schedules:
@@ -456,7 +555,8 @@ def validate_source_chunks(
             )
 
     print(f"Validation passed: {document_type}")
-    print(f"  Pages: {len(pages)}")
+    print(f"  PDF pages: {total_pdf_pages}")
+    print(f"  Pages extracted: {len(pages)}")
     print(f"  Chunks: {len(chunks)}")
 
 
@@ -465,14 +565,18 @@ def ingest_legal_documents() -> None:
     prepared_sources = []
 
     for source in LEGAL_SOURCES:
-        print(f"\\nPreparing: {source['document_type']}")
+        print(f"\nPreparing: {source['document_type']}")
+
         pages = extract_pdf_pages(source)
         chunks = split_legal_pages(pages)
+
         validate_source_chunks(source, pages, chunks)
         report_source(source, pages, chunks)
+
         prepared_sources.append((source, chunks))
 
     CHROMA_DIR.mkdir(parents=True, exist_ok=True)
+
     embeddings = create_embeddings()
 
     vector_store = Chroma(
@@ -485,21 +589,26 @@ def ingest_legal_documents() -> None:
 
     for source, chunks in prepared_sources:
         filename = source["filename"]
-        print(f"\\nReplacing vectors for: {filename}")
+
+        print(f"\nReplacing vectors for: {filename}")
 
         safely_replace_source_chunks(
             vector_store,
             filename,
             chunks,
         )
+
         total_chunks += len(chunks)
 
-    print("\\n" + "=" * 60)
+    print("\n" + "=" * 60)
     print("LEGAL DOCUMENT INGESTION COMPLETED")
     print("=" * 60)
     print(f"Collection: {COLLECTION_NAME}")
     print(f"Chunks processed: {total_chunks}")
-    print(f"Total vectors in collection: {vector_store._collection.count()}")
+    print(
+        "Total vectors in collection: "
+        f"{vector_store._collection.count()}"
+    )
     print(f"Database location: {CHROMA_DIR}")
 
 

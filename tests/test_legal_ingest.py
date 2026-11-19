@@ -279,3 +279,66 @@ def test_extract_pdf_pages_rejects_missing_pdf(tmp_path, monkeypatch):
 
     with pytest.raises(FileNotFoundError):
         ingest.extract_pdf_pages(source)
+
+def test_numbered_schedule_paragraphs_are_not_detected_as_rules():
+    text = (
+        "23. Calling for information from Data Fiduciary or intermediary.\n"
+        "The Central Government may require information.\n\n"
+        "FIRST SCHEDULE\n"
+        "[See rule 4]\n"
+        "PART A\n"
+        "1. The applicant is a company incorporated in India.\n"
+        "2. The applicant has sufficient capacity to fulfil its obligations.\n"
+        "3. The financial condition of the applicant is sound.\n"
+    )
+
+    markers = ingest._find_provision_markers(
+        text,
+        "DPDP Rules, 2025",
+    )
+
+    labels = [label for _, label in markers]
+
+    assert any(label.startswith("Rule 23:") for label in labels)
+    assert "First Schedule" in labels
+    assert not any(label.startswith("Rule 1:") for label in labels)
+    assert not any(label.startswith("Rule 2:") for label in labels)
+    assert not any(label.startswith("Rule 3:") for label in labels)
+
+
+def test_schedule_classification_continues_across_pages():
+    first_page = make_page(
+        "23. Calling for information from Data Fiduciary or intermediary.\n"
+        "The Central Government may require information.\n\n"
+        "FIRST SCHEDULE\n"
+        "[See rule 4]\n"
+        "PART A\n"
+        "Conditions for registration.",
+        page=9,
+        document_type="DPDP Rules, 2025",
+    )
+
+    second_page = make_page(
+        "1. The applicant is a company incorporated in India.\n"
+        "2. The applicant has sufficient capacity to fulfil its obligations.\n"
+        "3. The financial condition of the applicant is sound.",
+        page=10,
+        document_type="DPDP Rules, 2025",
+    )
+
+    chunks = ingest.split_legal_pages([first_page, second_page])
+
+    second_page_chunks = [
+        chunk for chunk in chunks
+        if chunk.metadata["pdf_page"] == 10
+    ]
+
+    assert second_page_chunks
+    assert all(
+        chunk.metadata["provision"] == "First Schedule"
+        for chunk in second_page_chunks
+    )
+    assert not any(
+        chunk.metadata["provision"].startswith("Rule ")
+        for chunk in second_page_chunks
+    )

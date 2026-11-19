@@ -58,3 +58,42 @@ def test_empty_assessment_returns_no_score():
     assert score.score is None
     assert score.total_findings == 0
     assert score.assessment_coverage_percent is None
+
+
+def test_score_is_withheld_below_minimum_coverage():
+    result = LegalAnalysisResult(
+        findings=[
+            finding(S.POTENTIAL_COMPLIANCE, "A1"),
+            finding(S.INSUFFICIENT_EVIDENCE, "A2"),
+            finding(S.REQUIRES_REVIEW, "A3"),
+            finding(S.INSUFFICIENT_EVIDENCE, "A4"),
+        ]
+    )
+
+    score = ComplianceScoringEngine().calculate(result)
+
+    assert score.score is None
+    assert score.assessed_findings == 1
+    assert score.assessment_coverage_percent == 25.0
+    assert score.minimum_coverage_percent == 50.0
+    assert "below the required minimum" in score.score_withheld_reason
+
+
+def test_custom_minimum_coverage_threshold_is_respected():
+    result = LegalAnalysisResult(
+        findings=[
+            finding(S.POTENTIAL_COMPLIANCE, "A1"),
+            finding(S.INSUFFICIENT_EVIDENCE, "A2"),
+            finding(S.INSUFFICIENT_EVIDENCE, "A3"),
+            finding(S.INSUFFICIENT_EVIDENCE, "A4"),
+        ]
+    )
+
+    score = ComplianceScoringEngine(
+        min_coverage_percent=20.0
+    ).calculate(result)
+
+    assert score.score == 100.0
+    assert score.assessment_coverage_percent == 25.0
+    assert score.minimum_coverage_percent == 20.0
+    assert score.score_withheld_reason is None

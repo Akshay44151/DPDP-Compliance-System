@@ -1,4 +1,4 @@
-from agents.legal_rag.schemas import (
+﻿from agents.legal_rag.schemas import (
     FailedLLMCall,
     FailedRetrieval,
     LegalAnalysisResult,
@@ -47,7 +47,7 @@ def test_report_contains_findings_recommendations_and_score():
         potential_compliance_count=0,
         potential_non_compliance_count=1,
         insufficient_evidence_count=1,
-        requires_review_count=1,
+        requires_review_count=0,
         not_applicable_count=0,
         assessment_coverage_percent=50,
         score_description="Test score",
@@ -69,7 +69,7 @@ def test_report_contains_findings_recommendations_and_score():
     assert report.sources_consulted == ["dpdp_act.pdf"]
     assert "not legal advice" in report.disclaimer
     assert "50.00%" in report.executive_summary
-    assert "1 require review" in report.executive_summary
+    assert "0 require review" in report.executive_summary
     assert len(report.failed_calls) == 1
     assert report.failed_calls[0].error_type == "RateLimitError"
     assert len(report.retrieval_failures) == 1
@@ -104,3 +104,40 @@ def test_report_handles_missing_score():
     assert "The provisional score was withheld" in report.executive_summary
     assert "Assessment coverage: unavailable" in report.executive_summary
     assert report.failed_calls == []
+
+
+
+def test_not_applicable_finding_is_preserved_without_recommendation():
+    not_applicable = LegalFinding(
+        alignment_finding_id="A-NOT-APPLICABLE",
+        status=S.NOT_APPLICABLE,
+        legal_reasoning="This requirement does not apply to the organisation.",
+    )
+    analysis = LegalAnalysisResult(findings=[not_applicable])
+
+    score = ComplianceScore(
+        score=None,
+        total_findings=1,
+        assessed_findings=0,
+        potential_compliance_count=0,
+        potential_non_compliance_count=0,
+        insufficient_evidence_count=0,
+        requires_review_count=0,
+        not_applicable_count=1,
+        assessment_coverage_percent=None,
+        score_description="No applicable findings were assessed.",
+    )
+
+    report = ReportGenerationAgent().generate(
+        ReportGenerationRequest(
+            assessment_id="NOT-APPLICABLE-TEST",
+            legal_analysis=analysis,
+            score=score,
+        )
+    )
+
+    assert len(report.findings) == 1
+    assert report.findings[0].status == S.NOT_APPLICABLE
+    assert report.findings[0].alignment_finding_id == "A-NOT-APPLICABLE"
+    assert report.recommendations == []
+    assert report.score.not_applicable_count == 1
