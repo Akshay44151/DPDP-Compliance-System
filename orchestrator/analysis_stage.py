@@ -23,6 +23,7 @@ from collections.abc import Callable
 from orchestrator.alignment_stage import STEP_NAME as ALIGNMENT_STEP
 from orchestrator.alignment_stage import run_alignment_stage
 from orchestrator.dedup import drop_duplicate_claims  # added: dedup step
+from orchestrator.gate_stage import run_gate_stage  # added: evidence gate
 from orchestrator.implementation_stage import STEP_NAME as IMPLEMENTATION_STEP
 from orchestrator.implementation_stage import run_implementation_stage
 from orchestrator.interfaces import (
@@ -149,3 +150,6 @@ def run_analysis_stages(
         retry_delay_seconds=retry_delay_seconds,
         sleep=sleep,
     )
+
+    # Added: check the evidence behind Agent 3's findings.
+    run_gate_stage(state)
