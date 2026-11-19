@@ -59,6 +59,7 @@ def build_audit_record(
         ],
         "implementation_report": state.implementation_report,
         "alignment_result": state.alignment_result,
+        "evidence_gate": state.evidence_gate,
         "step_log": [
             record.model_dump(mode="json") for record in state.step_log
         ],

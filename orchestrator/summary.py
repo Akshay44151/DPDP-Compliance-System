@@ -59,6 +59,10 @@ class AssessmentSummary(BaseModel):
     documents_without_claims: list[str] = []
     failed_steps: list[StepIssue] = []
     warnings: list[str] = []
+    # Evidence gate decisions by kind (blocked, review_only, pass, not_gated).
+    # None means the gate produced no result.
+    gate_counts: dict[str, int] | None = None
+    gate_warnings: list[str] = []
     incomplete_reasons: list[str] = []
     is_complete: bool = False
 
@@ -199,6 +203,23 @@ def summarize_assessment(state: AssessmentState) -> AssessmentSummary:
                 "findings may be wrong."
             )
 
+    # Evidence gate: checks the evidence behind Agent 3's findings.
+    gate = state.evidence_gate
+    gate_counts = None
+    gate_warnings: list[str] = []
+    if gate is not None:
+        gate_counts = {
+            str(key): int(value) for key, value in (gate.get("counts") or {}).items()
+        }
+        gate_warnings = [str(w) for w in (gate.get("warnings") or [])]
+        blocked = gate_counts.get("blocked", 0)
+        if blocked:
+            reasons.append(
+                f"{blocked} finding(s) were blocked by the evidence gate: the "
+                "scan behind them was incomplete or a cited fact was missing, "
+                "so they are not reported as gaps."
+            )
+
     return AssessmentSummary(
         assessment_id=state.request.assessment_id,
         outcome_counts=outcome_counts,
@@ -212,6 +233,8 @@ def summarize_assessment(state: AssessmentState) -> AssessmentSummary:
         documents_without_claims=missing_documents,
         failed_steps=failed_steps,
         warnings=warnings,
+        gate_counts=gate_counts,
+        gate_warnings=gate_warnings,
         incomplete_reasons=reasons,
         is_complete=not reasons,
     )
