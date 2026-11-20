@@ -97,3 +97,12 @@ def test_write_never_overwrites(tmp_path):
 
     with pytest.raises(FileExistsError):
         write_audit_record(record, tmp_path)
+
+
+def test_record_keeps_unknown_verdict_ids():
+    state = make_state()
+    state.alignment_result = {"findings": [], "llm_failures": 0,
+                              "unknown_verdict_ids": ["pc_000000000000"]}
+    record = build_audit_record(state, make_summary(), created_at=FIXED_TIME)
+
+    assert record["alignment_result"]["unknown_verdict_ids"] == ["pc_000000000000"]

@@ -221,6 +221,7 @@ class AlignmentAgent:
         return AlignmentResult(findings=findings, summary=summary,
                                llm_retries=self.retries, llm_failures=self.failures,
                                failed_calls=self.failed_calls,
+                               unknown_verdict_ids=list(self.unknown_verdict_ids),
                                policy_text_chars=text_chars, policy_text_truncated=truncated)
 
     # ---------- pass 1 ----------
