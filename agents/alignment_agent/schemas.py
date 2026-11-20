@@ -53,5 +53,10 @@ class AlignmentResult(BaseModel):
         default_factory=list,
         description="Exhausted call IDs: verdict:<category-value> or undeclared.",
     )
+    unknown_verdict_ids: list[str] = Field(
+        default_factory=list,
+        description="Claim ids the model returned that matched no claim; those claims become "
+                    "unverifiable (invalid_model_output). Not counted in llm_failures.",
+    )
     policy_text_chars: int = 0  # length of the policy text passed in (0 if none)
     policy_text_truncated: bool = False  # True if it was cut to max_policy_chars; a cut text is not coverage

@@ -230,6 +230,8 @@ def test_unknown_or_positional_ids_are_never_matched_to_a_claim():
     [finding] = claim_checks(result)
     assert finding.status == S.UNVERIFIABLE and finding.reason_code == "invalid_model_output"
     assert agent.unknown_verdict_ids == ["C1", "pc_000000000000"]
+    assert result.unknown_verdict_ids == ["C1", "pc_000000000000"]
+    assert result.model_dump(mode="json")["unknown_verdict_ids"] == ["C1", "pc_000000000000"]
 
 
 def test_conflicting_duplicate_verdicts_become_unverifiable():
@@ -352,3 +354,13 @@ def test_agents_build_on_the_real_chatgroq_model_without_network():
     model = get_langchain_model(LLMConfig(model="openai/gpt-oss-120b", api_key="dummy-key"))
     assert ImplementationExtractionAgent(model).chain is not None
     assert AlignmentAgent(model).verdict_chain is not None
+
+
+def test_matched_verdicts_leave_unknown_verdict_ids_empty():
+    policy = PolicyExtractionResult(claims=[
+        consent_claim("We obtain consent.", "We obtain consent before marketing.")])
+    rep = report(fact("F1", C.CONSENT, "Consent is recorded."))
+    model = KeyedChatModel({"consent": {"verdicts": [
+        verdict("aligned", ["F1"], claim_id=cid(policy.claims[0]))]}})
+    result = AlignmentAgent(model).run(policy, rep)
+    assert result.unknown_verdict_ids == []

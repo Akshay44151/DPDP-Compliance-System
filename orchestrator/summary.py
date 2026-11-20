@@ -56,6 +56,7 @@ class AssessmentSummary(BaseModel):
     implementation_llm_failures: int | None = None
     alignment_llm_failures: int | None = None
     alignment_failed_calls: list[str] = []
+    alignment_unknown_verdict_ids: list[str] = []
     documents_without_claims: list[str] = []
     failed_steps: list[StepIssue] = []
     warnings: list[str] = []
@@ -153,6 +154,7 @@ def summarize_assessment(state: AssessmentState) -> AssessmentSummary:
     truncated = None
     alignment_failures = None
     failed_calls: list[str] = []
+    unknown_verdict_ids: list[str] = []
 
     if alignment is None:
         reasons.append("Agent 3 produced no result, so nothing was assessed.")
@@ -175,6 +177,7 @@ def summarize_assessment(state: AssessmentState) -> AssessmentSummary:
 
         alignment_failures = int(alignment.get("llm_failures", 0))
         failed_calls = [str(call) for call in alignment.get("failed_calls", [])]
+        unknown_verdict_ids = [str(i) for i in alignment.get("unknown_verdict_ids", [])]
         text_chars = alignment.get("policy_text_chars")
         truncated = bool(alignment.get("policy_text_truncated", False))
 
@@ -230,6 +233,7 @@ def summarize_assessment(state: AssessmentState) -> AssessmentSummary:
         implementation_llm_failures=implementation_failures,
         alignment_llm_failures=alignment_failures,
         alignment_failed_calls=failed_calls,
+        alignment_unknown_verdict_ids=unknown_verdict_ids,
         documents_without_claims=missing_documents,
         failed_steps=failed_steps,
         warnings=warnings,
