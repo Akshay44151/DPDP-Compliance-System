@@ -1,3 +1,4 @@
+from agents.alignment_agent.schemas import AlignmentResult
 from agents.policy_agent.schemas import PolicyCategory, PolicyClaim
 from orchestrator.alignment_stage import STEP_NAME, run_alignment_stage
 from orchestrator.models import (
@@ -151,3 +152,26 @@ def test_sleeps_between_retries():
         state, factory, object(), retry_delay_seconds=0.5, sleep=waits.append
     )
     assert waits == [0.5]
+
+
+def test_unknown_verdict_ids_survive_in_the_stored_result():
+    """The stage stores the full model_dump, so a field added to AlignmentResult must reach the state."""
+    state = make_state()
+    result = AlignmentResult(findings=[], summary={}, unknown_verdict_ids=["pc_000000000000"])
+    factory, _, _ = make_factory([result])
+    run_alignment_stage(state, factory, object(), sleep=no_sleep)
+    assert state.alignment_result["unknown_verdict_ids"] == ["pc_000000000000"]
+
+
+def test_unknown_verdict_ids_come_from_the_kept_attempt_only():
+    """Documents current behaviour: only the best attempt's dump is stored, so ids from a discarded
+    attempt are not kept (the same as llm_failures and failed_calls)."""
+    state = make_state()
+    first = AlignmentResult(
+        findings=[], summary={}, llm_failures=1, unknown_verdict_ids=["pc_aaaaaaaaaaaa"]
+    )
+    second = AlignmentResult(findings=[], summary={}, unknown_verdict_ids=[])
+    factory, _, made = make_factory([first, second])
+    run_alignment_stage(state, factory, object(), sleep=no_sleep)
+    assert len(made) == 2
+    assert state.alignment_result["unknown_verdict_ids"] == []
