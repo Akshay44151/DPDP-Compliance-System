@@ -126,6 +126,8 @@ It distinguishes between:
 
 It also reports unexpected undeclared evidence.
 
+**Detection rate clarification:** `detection_rate` measures explicit undeclared-practice detection only. Practices reported under an existing violated claim are tracked separately as `reported_under_violation` and are not counted as explicit undeclared detections. The denominator includes evaluable practices found by the scanner, including missed and insufficient-evidence cases.
+
 Matching uses structured scanner evidence, including model-field names and personal-data logging tokens.
 
 ### 5.5 Seeded-Violation Comparison — `compare_seeded_violations.py`
