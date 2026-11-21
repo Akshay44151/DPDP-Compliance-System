@@ -1,8 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import re
-from dataclasses import replace
 from typing import Any
 
 from agents.alignment_agent.schemas import AlignmentStatus
@@ -92,6 +91,35 @@ def normalise(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def llm_error_diagnostics(exc: Exception) -> dict[str, Any]:
+    """Extract safe HTTP and rate-limit metadata from an LLM API error."""
+    details = {"error_type": type(exc).__name__}
+
+    status_code = getattr(exc, "status_code", None)
+    if status_code is not None:
+        details["http_status"] = str(status_code)[:20]
+
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+
+    if headers is not None:
+        for header, field in {
+            "retry-after": "retry_after",
+            "retry-after-ms": "retry_after_ms",
+            "x-ratelimit-reset-requests": "rate_limit_reset_requests",
+            "x-ratelimit-reset-tokens": "rate_limit_reset_tokens",
+        }.items():
+            value = headers.get(header)
+            if value is not None:
+                details[field] = str(value)[:100]
+
+    request_id = getattr(exc, "request_id", None)
+    if request_id:
+        details["request_id"] = str(request_id)[:100]
+
+    return details
+
+
 class LLMServiceUnavailable(Exception):
     """Signals that the legal LLM service failed and further calls should stop."""
 
@@ -103,7 +131,7 @@ class LegalAnalysisAgent:
         if llm_client is None:
             from llm.groq_client import GroqLLMClient
             from llm.config import get_llm_config
-            config = replace(get_llm_config(), max_retries=0)
+            config = get_llm_config()
             llm_client = GroqLLMClient(config=config)
 
         self.llm_client = llm_client
@@ -291,7 +319,7 @@ class LegalAnalysisAgent:
                 failed_calls.append({
                     "alignment_finding_id": alignment.id,
                     "attempt": attempt,
-                    "error_type": type(exc).__name__,
+                    **llm_error_diagnostics(exc),
                 })
                 raise LLMServiceUnavailable(
                     f"Legal LLM call failed: {type(exc).__name__}."
