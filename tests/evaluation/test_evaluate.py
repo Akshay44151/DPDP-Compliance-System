@@ -21,6 +21,7 @@ EVIDENCE = (
     "You may withdraw your consent at any time from your account settings."
 )
 
+
 @pytest.fixture
 def ground_truth_file(tmp_path):
     data = {
@@ -156,18 +157,18 @@ def test_evaluate_application_integrates_seeded_violations():
                 "evidence_ids": ["E001"],
             },
             {
-    "kind": "claim_check",
-    "claim_id": make_claim_id(
-        POLICY_SOURCE,
-        PolicyCategory.PURPOSE_LIMITATION,
-        (
-            "We use this information only to provide and improve "
-            "our note-taking service."
-        ),
-    ),
-    "status": "violated",
-    "evidence_ids": ["E002"],
-},
+                "kind": "claim_check",
+                "claim_id": make_claim_id(
+                    POLICY_SOURCE,
+                    PolicyCategory.PURPOSE_LIMITATION,
+                    (
+                        "We use this information only to provide and improve "
+                        "our note-taking service."
+                    ),
+                ),
+                "status": "violated",
+                "evidence_ids": ["E002"],
+            },
         ]
     }
 
@@ -213,8 +214,15 @@ def test_evaluate_application_integrates_seeded_violations():
 
     assert seeded_results["missing_retention"] == "claim_finding_missing"
     assert (
-    seeded_results["missing_withdrawal"]
-    == "not_independently_evaluable"
-)
+        seeded_results["missing_withdrawal"]
+        == "not_independently_evaluable"
+    )
 
+    # All entries, including unevaluable entries.
     assert result["seeded_violation_evaluation"]["total"] == 4
+
+    # Only entries that can be independently evaluated.
+    assert (
+        result["seeded_violation_evaluation"]["independently_evaluable"]
+        == 3
+    )

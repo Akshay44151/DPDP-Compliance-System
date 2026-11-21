@@ -1,3 +1,4 @@
+
 # DPDP Compliance Evaluation Framework
 
 ## 1. Overview
@@ -136,7 +137,15 @@ Checks whether known seeded violations are identified.
 
 It evaluates evidence-backed violations, such as unconditional marketing emails and external advertising transfers, as well as missing implementation behaviours such as retention and consent withdrawal.
 
-It distinguishes between detected violations, missing scanner evidence, missed Agent findings, and missing claim findings.
+It distinguishes between detected violations, missing scanner evidence, missed Agent findings, missing claim findings, and entries that cannot be independently evaluated.
+
+**Reporting clarification:**
+
+- `total` represents all seeded-violation entries, including those marked as `not_independently_evaluable`.
+- `independently_evaluable` represents only entries that can be assessed independently.
+- `counts["not_independently_evaluable"]` reports entries excluded from independent assessment.
+
+The `total` field is a count of seeded-violation entries, not the detection-rate denominator. Entries marked `not_independently_evaluable` must not be interpreted as detected or missed violations.
 
 ### 5.6 Evaluation Entry Point — `evaluate.py`
 

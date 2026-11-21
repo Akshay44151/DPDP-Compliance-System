@@ -219,5 +219,10 @@ def compare_seeded_violations(
     return {
         "results": results,
         "counts": counts,
+        # Total includes all entries, including unevaluable ones.
         "total": len(results),
+        # Excludes entries that cannot be independently evaluated.
+        "independently_evaluable": (
+            len(results) - counts["not_independently_evaluable"]
+        ),
     }

@@ -300,6 +300,7 @@ def test_unrelated_finding_evidence_does_not_count_as_detection():
     )
     assert result["counts"]["detected"] == 0
 
+
 def test_reports_missing_withdrawal_as_not_independently_evaluable():
     expected = [
         {
@@ -330,3 +331,9 @@ def test_reports_missing_withdrawal_as_not_independently_evaluable():
     )
     assert result["counts"]["not_independently_evaluable"] == 1
     assert result["counts"]["detected"] == 0
+
+    # Total includes the unevaluable entry.
+    assert result["total"] == 1
+
+    # No entries can be independently evaluated.
+    assert result["independently_evaluable"] == 0
