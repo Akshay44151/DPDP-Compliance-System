@@ -82,20 +82,16 @@ def compare_seeded_violations(
 
     Evidence-based violations require:
     1. Matching scanner evidence.
-    2. Agent 3 citing that evidence.
+    2. The relevant Agent 3 claim finding citing that evidence.
     3. The related policy claim being marked violated.
+
+    Evidence cited by an unrelated claim finding does not count.
 
     Missing-implementation violations are evaluated using their claim status.
     """
     evidence_by_id = {
         _get_value(item, "id"): item
         for item in implementation_evidence
-    }
-
-    cited_evidence_ids = {
-        evidence_id
-        for finding in actual_findings
-        for evidence_id in (_get_value(finding, "evidence_ids", []) or [])
     }
 
     comparisons_by_key = {
@@ -115,6 +111,26 @@ def compare_seeded_violations(
             if claim_comparison
             else None
         )
+
+        claim_id = (
+            claim_comparison.get("claim_id")
+            if claim_comparison
+            else None
+        )
+
+        # Collect evidence only from the relevant Agent 3 claim finding.
+        cited_evidence_ids = {
+            evidence_id
+            for finding in actual_findings
+            if (
+                _get_value(finding, "kind") == "claim_check"
+                and claim_id is not None
+                and _get_value(finding, "claim_id") == claim_id
+            )
+            for evidence_id in (
+                _get_value(finding, "evidence_ids", []) or []
+            )
+        }
 
         # Missing implementation is assessed through the claim finding.
         if not expected.get("evidence_kind"):

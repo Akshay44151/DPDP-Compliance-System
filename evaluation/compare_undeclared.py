@@ -226,6 +226,9 @@ def compare_undeclared_practices(
         + counts["missed"]
     )
 
+    # Measures explicit undeclared-practice detection only.
+    # Practices reported under a violated claim are not counted
+    # as explicit undeclared detections.
     detection_rate = (
         counts["detected_undeclared"] / evaluable
         if evaluable

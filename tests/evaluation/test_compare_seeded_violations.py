@@ -31,6 +31,7 @@ def test_detects_unconditional_marketing_email():
             "kind": "claim_check",
             "status": "violated",
             "evidence_ids": ["E001"],
+            "claim_id": "marketing-claim",
         }
     ]
 
@@ -38,6 +39,7 @@ def test_detects_unconditional_marketing_email():
         {
             "key": "marketing_consent",
             "actual_status": "violated",
+            "claim_id": "marketing-claim",
         }
     ]
 
@@ -76,6 +78,7 @@ def test_detects_external_advertising_transfer():
             "kind": "claim_check",
             "status": "violated",
             "evidence_ids": ["E010"],
+            "claim_id": "purpose-claim",
         }
     ]
 
@@ -83,6 +86,7 @@ def test_detects_external_advertising_transfer():
         {
             "key": "purpose_limitation",
             "actual_status": "violated",
+            "claim_id": "purpose-claim",
         }
     ]
 
@@ -183,6 +187,7 @@ def test_reports_evidence_cited_but_claim_not_violated():
             "kind": "claim_check",
             "status": "partial",
             "evidence_ids": ["E010"],
+            "claim_id": "purpose-claim",
         }
     ]
 
@@ -190,6 +195,7 @@ def test_reports_evidence_cited_but_claim_not_violated():
         {
             "key": "purpose_limitation",
             "actual_status": "partial",
+            "claim_id": "purpose-claim",
         }
     ]
 
@@ -238,3 +244,58 @@ def test_reports_missing_claim_finding():
     )
 
     assert result["results"][0]["result"] == "claim_finding_missing"
+
+
+def test_unrelated_finding_evidence_does_not_count_as_detection():
+    expected = [
+        {
+            "key": "unconditional_marketing_email",
+            "expected_claim": "marketing_consent",
+            "evidence_kind": "outbound_email",
+            "evidence_match": {
+                "subjects_include": "Weekly offers",
+                "references_consent": False,
+            },
+        }
+    ]
+
+    evidence = [
+        {
+            "id": "E001",
+            "kind": "outbound_email",
+            "detail": {
+                "subjects": ["Weekly offers"],
+                "references_consent": False,
+            },
+        }
+    ]
+
+    # An unrelated policy finding cites the matching scanner evidence.
+    findings = [
+        {
+            "kind": "claim_check",
+            "claim_id": "unrelated-purpose-claim",
+            "status": "violated",
+            "evidence_ids": ["E001"],
+        }
+    ]
+
+    # The expected marketing claim is violated, but its own finding
+    # does not cite E001.
+    claim_comparisons = [
+        {
+            "key": "marketing_consent",
+            "claim_id": "expected-marketing-claim",
+            "actual_status": "violated",
+        }
+    ]
+
+    result = compare_seeded_violations(
+        expected, findings, evidence, claim_comparisons
+    )
+
+    assert (
+        result["results"][0]["result"]
+        == "scanner_found_agent_missed"
+    )
+    assert result["counts"]["detected"] == 0
