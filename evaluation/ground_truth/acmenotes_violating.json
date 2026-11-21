@@ -1,4 +1,3 @@
-
 {
   "schema_version": "1.0",
   "application": "acmenotes_violating",
@@ -19,18 +18,11 @@
       "reason": "The application sends marketing emails and transmits email addresses to an external advertising tracker."
     },
     {
-      "key": "marketing_consent",
+      "key": "consent",
       "category": "consent",
-      "evidence": "We ask for your consent before sending marketing emails.",
+      "evidence": "We ask for your consent before sending marketing emails. You may withdraw your consent at any time from your account settings.",
       "expected_status": "violated",
-      "reason": "The application sends weekly marketing emails without checking or obtaining marketing consent."
-    },
-    {
-      "key": "consent_withdrawal",
-      "category": "consent",
-      "evidence": "You may withdraw your consent at any time from your account settings.",
-      "expected_status": "violated",
-      "reason": "The violating application has no consent withdrawal implementation."
+      "reason": "The application sends weekly marketing emails without checking consent and has no consent withdrawal implementation."
     },
     {
       "key": "retention",
@@ -101,16 +93,16 @@
   ],
   "known_seeded_violations": [
     {
-       "key": "unconditional_marketing_email",
-       "practice": "Marketing emails sent without consent",
-       "evidence_kind": "outbound_email",
-       "expected_claim": "marketing_consent",
-       "evidence_match": {
-           "subjects_include": "Weekly offers",
-           "references_consent": false
-         }
-  },
-        {
+      "key": "unconditional_marketing_email",
+      "practice": "Marketing emails sent without consent",
+      "evidence_kind": "outbound_email",
+      "expected_claim": "consent",
+      "evidence_match": {
+        "subjects_include": "Weekly offers",
+        "references_consent": false
+      }
+    },
+    {
       "key": "external_advertising_transfer",
       "practice": "Email address transmitted to an external advertising tracker",
       "evidence_kind": "data_sharing",
@@ -127,7 +119,9 @@
     {
       "key": "missing_withdrawal",
       "practice": "No consent withdrawal implementation",
-      "expected_claim": "consent_withdrawal"
+      "expected_claim": "consent",
+      "evaluation_status": "not_independently_evaluable",
+      "evaluation_reason": "Agent 3 returns one combined consent finding covering both marketing consent and withdrawal. Its single verdict cannot independently establish whether withdrawal is implemented."
     }
   ],
   "excluded_content": [

@@ -87,7 +87,9 @@ def compare_seeded_violations(
 
     Evidence cited by an unrelated claim finding does not count.
 
-    Missing-implementation violations are evaluated using their claim status.
+    Missing-implementation violations are evaluated using their claim status,
+    unless their ground-truth entry explicitly marks them as not independently
+    evaluable because Agent 3 combines multiple policy promises into one claim.
     """
     evidence_by_id = {
         _get_value(item, "id"): item
@@ -105,7 +107,26 @@ def compare_seeded_violations(
         key = expected["key"]
         expected_claim = expected.get("expected_claim")
 
+        # A combined Agent 3 finding cannot independently establish
+        # whether one particular sub-claim, such as consent withdrawal,
+        # was implemented. Do not count it as detected or missed.
+        if (
+            expected.get("evaluation_status")
+            == "not_independently_evaluable"
+        ):
+            results.append({
+                "key": key,
+                "expected_claim": expected_claim,
+                "claim_status": None,
+                "matching_evidence_ids": [],
+                "cited_evidence_ids": [],
+                "result": "not_independently_evaluable",
+                "reason": expected.get("evaluation_reason", ""),
+            })
+            continue
+
         claim_comparison = comparisons_by_key.get(expected_claim)
+
         claim_status = (
             claim_comparison.get("actual_status")
             if claim_comparison
@@ -189,6 +210,7 @@ def compare_seeded_violations(
         "claim_not_violated": 0,
         "claim_finding_missing": 0,
         "evidence_cited_claim_not_violated": 0,
+        "not_independently_evaluable": 0,
     }
 
     for item in results:

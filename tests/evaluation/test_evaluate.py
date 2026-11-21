@@ -17,9 +17,9 @@ from evaluation.evaluate import (
 POLICY_SOURCE = "synthetic_privacy_policy.txt"
 
 EVIDENCE = (
-    "We ask for your consent before sending marketing emails."
+    "We ask for your consent before sending marketing emails. "
+    "You may withdraw your consent at any time from your account settings."
 )
-
 
 @pytest.fixture
 def ground_truth_file(tmp_path):
@@ -29,7 +29,7 @@ def ground_truth_file(tmp_path):
         "policy_source": POLICY_SOURCE,
         "expected_claims": [
             {
-                "key": "marketing_consent",
+                "key": "consent",
                 "category": "consent",
                 "evidence": EVIDENCE,
                 "expected_status": "violated",
@@ -212,6 +212,9 @@ def test_evaluate_application_integrates_seeded_violations():
     assert seeded_results["external_advertising_transfer"] == "detected"
 
     assert seeded_results["missing_retention"] == "claim_finding_missing"
-    assert seeded_results["missing_withdrawal"] == "claim_finding_missing"
+    assert (
+    seeded_results["missing_withdrawal"]
+    == "not_independently_evaluable"
+)
 
     assert result["seeded_violation_evaluation"]["total"] == 4

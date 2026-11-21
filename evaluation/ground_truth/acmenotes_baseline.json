@@ -1,4 +1,3 @@
-
 {
   "schema_version": "1.0",
   "application": "acmenotes_baseline",
@@ -19,18 +18,11 @@
       "reason": "The application also sends product update emails when marketing consent is recorded. This is a separate purpose."
     },
     {
-      "key": "marketing_consent",
+      "key": "consent",
       "category": "consent",
-      "evidence": "We ask for your consent before sending marketing emails.",
-      "expected_status": "aligned",
-      "reason": "The baseline application has a marketing consent checkbox and sends marketing emails conditionally."
-    },
-    {
-      "key": "consent_withdrawal",
-      "category": "consent",
-      "evidence": "You may withdraw your consent at any time from your account settings.",
+      "evidence": "We ask for your consent before sending marketing emails. You may withdraw your consent at any time from your account settings.",
       "expected_status": "partial",
-      "reason": "The application contains withdrawal logic, but the supplied code does not establish that withdrawal is available through account settings."
+      "reason": "The application has a marketing consent checkbox and withdrawal logic, but the evidence does not establish that withdrawal is available through the account settings mechanism promised by the policy."
     },
     {
       "key": "retention",

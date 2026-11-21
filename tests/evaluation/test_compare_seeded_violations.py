@@ -299,3 +299,34 @@ def test_unrelated_finding_evidence_does_not_count_as_detection():
         == "scanner_found_agent_missed"
     )
     assert result["counts"]["detected"] == 0
+
+def test_reports_missing_withdrawal_as_not_independently_evaluable():
+    expected = [
+        {
+            "key": "missing_withdrawal",
+            "expected_claim": "consent",
+            "evaluation_status": "not_independently_evaluable",
+            "evaluation_reason": (
+                "Agent 3 returns one combined consent finding."
+            ),
+        }
+    ]
+
+    claim_comparisons = [
+        {
+            "key": "consent",
+            "actual_status": "violated",
+            "claim_id": "combined-consent-claim",
+        }
+    ]
+
+    result = compare_seeded_violations(
+        expected, [], [], claim_comparisons
+    )
+
+    assert (
+        result["results"][0]["result"]
+        == "not_independently_evaluable"
+    )
+    assert result["counts"]["not_independently_evaluable"] == 1
+    assert result["counts"]["detected"] == 0
