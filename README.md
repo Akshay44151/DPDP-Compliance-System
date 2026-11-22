@@ -2,7 +2,104 @@
 # DPDP-Compliance-System
 
 General-purpose multi-agent system for automated DPDP compliance assessment.
+## Project Setup and Running the Assessment
 
+### Requirements
+
+- Python 3.10 or later
+- Git
+- Groq API key for real LLM-based assessment
+- Official DPDP Act and DPDP Rules PDFs for legal RAG
+
+### 1. Clone the repository
+
+```powershell
+git clone https://github.com/krithiika-s/DPDP-Compliance-System.git
+cd DPDP-Compliance-System
+```
+
+### 2. Create and activate a virtual environment
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+### 3. Install dependencies
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+### 4. Configure environment variables
+
+Create a local `.env` file in the repository root.
+
+Configure the following variables using your own Groq credentials and selected model:
+
+```text
+GROQ_API_KEY=your_groq_api_key
+LLM_PROVIDER=groq
+LLM_MODEL=your_supported_model
+```
+
+Never commit `.env` or expose API keys.
+
+### 5. Run the assessment
+
+**Demo mode (default):**
+
+```powershell
+python -m scripts.run_assessment
+```
+
+Uses the demo pipeline without real LLM API calls.
+
+**Real Agents 1–3:**
+
+```powershell
+python -m scripts.run_assessment --real
+```
+
+Uses real LLM calls for policy extraction, implementation analysis and alignment.
+
+**Full real pipeline:**
+
+```powershell
+python -m scripts.run_assessment --full-real
+```
+
+Runs the complete pipeline, including legal reasoning, evidence gates, deterministic scoring and report generation. This mode makes real API calls and may incur usage charges.
+
+Use `--project` and `--policy` to provide custom input paths.
+
+**Interactive Streamlit assessment app:**
+
+Create `.streamlit/secrets.toml` locally with:
+
+```toml
+APP_PASSWORD = "your_private_password"
+GROQ_API_KEY = "your_groq_api_key"
+LLM_MODEL = "your_supported_model"
+```
+
+Launch the interactive app from the repository root:
+
+```powershell
+streamlit run streamlit_app.py
+```
+
+### 6. Run tests
+
+```powershell
+python -m pytest -q
+```
+
+The automated tests use mocks and local test fixtures where appropriate. They do not require live Groq API calls.
+
+### Important limitations
+
+This project is a research prototype, not a legal certification tool. Assessment findings require human review. A complete successful live end-to-end assessment has not yet been established.
 ## Legal RAG Setup (Person 3)
 
 The Legal RAG component retrieves relevant provisions from the official

@@ -59,7 +59,20 @@ def make_legal_result():
         applicable_provisions=[],
         legal_reasoning="A potential issue was identified.",
         evidence_fact_ids=["fact-1"],
-        citations=[],
+        citations=[
+            {
+                "source_id": "LEGAL-act-P6-R1",
+                "provision": "Section 6",
+                "document_type": "act",
+                "source_file": "dpdp_act.pdf",
+                "pdf_page": 6,
+                "excerpt": (
+                    "The consent given by the Data Principal shall be free, "
+                    "specific, informed, unconditional and unambiguous with a "
+                    "clear affirmative action."
+                ),
+            }
+        ],
         confidence=0.8,
         limitations=[],
     )
@@ -397,9 +410,23 @@ def test_real_evidence_gate_downgrades_before_scoring_and_reporting():
         "potential_non_compliance"
     )
 
+    # Original evidence and citations must remain unchanged.
+    original_finding = state.legal_analysis_original["findings"][0]
+    assert original_finding["evidence_fact_ids"] == ["fact-1"]
+    assert original_finding["citations"][0]["source_id"] == (
+        "LEGAL-act-P6-R1"
+    )
+
     # The real evidence gate must downgrade the finding.
     assert state.legal_analysis_gated["findings"][0]["status"] == (
         "insufficient_evidence"
+    )
+
+    # The legal gate must preserve evidence and citations.
+    gated_finding = state.legal_analysis_gated["findings"][0]
+    assert gated_finding["evidence_fact_ids"] == ["fact-1"]
+    assert gated_finding["citations"][0]["source_id"] == (
+        "LEGAL-act-P6-R1"
     )
 
     # Scoring must receive the downgraded result.
@@ -407,10 +434,13 @@ def test_real_evidence_gate_downgrades_before_scoring_and_reporting():
         LegalAssessmentStatus.INSUFFICIENT_EVIDENCE
     )
 
-    # Agent 5 must also receive the downgraded result.
-    assert report_agent.received_request.legal_analysis.findings[0].status == (
-        LegalAssessmentStatus.INSUFFICIENT_EVIDENCE
-    )
+    # Agent 5 must receive the downgraded result.
+    report_finding = report_agent.received_request.legal_analysis.findings[0]
+    assert report_finding.status == LegalAssessmentStatus.INSUFFICIENT_EVIDENCE
+
+    # Agent 5 must also receive the evidence and citation references.
+    assert report_finding.evidence_fact_ids == ["fact-1"]
+    assert report_finding.citations[0].source_id == "LEGAL-act-P6-R1"
 
     assert len(state.legal_gate_application["changes"]) == 1
     assert state.step_log[-1].status == StepStatus.COMPLETED

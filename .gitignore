@@ -223,3 +223,14 @@ __marimo__/
 knowledge_base/chroma_db/
 before_*.json
 after_*.json
+# Environment secrets and private keys
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+# Generated assessment outputs (may contain project or audit data)
+sample_output/
+audit_output/
+.streamlit/secrets.toml

@@ -248,3 +248,33 @@ def test_summary_round_trips_through_json():
     data = s.model_dump(mode="json")
 
     assert AssessmentSummary.model_validate(data) == s
+
+
+def test_legal_status_counts_use_gated_findings():
+    state = make_state()
+
+    state.legal_analysis_original = {
+        "findings": [
+            {
+                "id": "finding-1",
+                "status": "potential_non_compliance",
+            }
+        ],
+        "failed_calls": [],
+        "retrieval_failures": [],
+    }
+
+    state.legal_analysis_gated = {
+        "findings": [
+            {
+                "id": "finding-1",
+                "status": "insufficient_evidence",
+            }
+        ],
+    }
+
+    summary = summarize_assessment(state)
+
+    assert summary.legal_status_counts == {
+        "insufficient_evidence": 1
+    }

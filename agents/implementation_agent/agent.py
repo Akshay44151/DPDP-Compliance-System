@@ -40,9 +40,7 @@ pipeline. You are given static-analysis evidence from a Django application for O
 category. Describe what the code actually does. Rules:
 - State only what the evidence supports. Do NOT judge compliance and do NOT read any privacy policy.
 - Every fact must cite evidence ids from the list. Never invent ids.
-- If the evidence shows something is missing (e.g. coverage count is 0 for a relevant kind, \
-or data is written or emailed with no consent reference), emit a fact with fact_type "absent" or \
-"partial" and cite the nearest evidence (e.g. the data_write items), or none if there is none.
+- Do NOT emit fact_type "absent". A zero evidence count or a missing scanner match does not prove that a control is absent.
 - Keep each statement to one concrete sentence.
 - Be concise: group related items into ONE fact (for example list all personal-data model fields \
 in a single statement, and all form inputs in another). One fact per distinct behaviour.
@@ -57,8 +55,7 @@ what a file contains, or that it is empty, from a missing snippet.
 the evidence; in a fact about a database write, list every field in its "fields" detail; in a fact \
 about an outbound email, give its subject; in a fact about a withdrawal or unsubscribe control, \
 name it.
-- If COVERAGE lists data_sharing with a count of 0, emit one "absent" fact stating that no code \
-sends personal data to external services."""
+- A zero data_sharing count is not proof that external sharing does not occur."""
 
 
 HUMAN_PROMPT = "{task_input}"  # rendered evidence goes in as a variable, so code braces are safe
@@ -104,6 +101,8 @@ class ImplementationExtractionAgent:
             relevant = [e for e in evidence if e.kind in kinds][:MAX_EVIDENCE_PER_CATEGORY]
             raw = self._ask(category, relevant, coverage, kinds)
             for i, rf in enumerate(raw.facts, 1):
+                if rf.fact_type == "absent":
+                    continue  # scanner matches cannot prove that a control is absent
                 ids = [x for x in rf.evidence_ids if x in by_id]  # drop hallucinated ids
                 facts.append(ImplementationFact(
                     id=f"F-{category.name}-{i:02d}",

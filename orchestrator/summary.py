@@ -329,8 +329,11 @@ def summarize_assessment(state: AssessmentState) -> AssessmentSummary:
                 "Agent 4 produced no legal analysis result."
             )
         else:
-            legal_findings = original.get("findings", [])
-
+            legal_findings = (
+               gated.get("findings", [])
+               if gated is not None
+               else []
+         )
             legal_status_counts = {}
             for finding in legal_findings:
                 status = str(finding.get("status", "unknown"))

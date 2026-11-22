@@ -1,5 +1,4 @@
-
-groq
+﻿groq
 pydantic
 python-dotenv
 pytest

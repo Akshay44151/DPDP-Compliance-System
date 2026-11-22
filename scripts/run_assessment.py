@@ -4,7 +4,9 @@
 Default mode uses fake Agents 1-4 and deterministic Agent 5/scoring.
 It requires no model, API key, or network access.
 
-The --real mode currently runs real Agents 1-3 only and makes API calls.
+The --real mode runs real Agents 1-3 and makes API calls.
+The --full-real mode runs the complete real pipeline, including
+legal analysis, evidence gates, scoring, and report generation.
 """
 
 import argparse
@@ -12,10 +14,23 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
-
-from agents.alignment_agent.schemas import AlignmentResult
-from agents.implementation_agent.schemas import ImplementationReport
-from agents.legal_rag.schemas import LegalAnalysisResult
+from agents.alignment_agent.schemas import (
+    AlignmentFinding,
+    AlignmentResult,
+    AlignmentStatus,
+)
+from agents.implementation_agent.schemas import (
+    CodeLocation,
+    EvidenceItem,
+    ImplementationFact,
+    ImplementationReport,
+)
+from agents.legal_rag.schemas import (
+    LegalAnalysisResult,
+    LegalAssessmentStatus,
+    LegalCitation,
+    LegalFinding,
+)
 from agents.policy_agent.schemas import (
     PolicyCategory,
     PolicyClaim,
@@ -30,6 +45,7 @@ from orchestrator.audit import build_audit_record, write_audit_record
 from orchestrator.final_assessment_stage import run_final_assessment_stage
 from orchestrator.models import AssessmentRequest, AssessmentState, PolicyDocument
 from orchestrator.summary import summarize_assessment
+
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -258,7 +274,101 @@ def run_real(
         "REAL Agents 1-3 run finished.",
         "dpdp_audit_real",
     )
+    return 0
 
+def run_full_real(
+    project: str | Path,
+    policy: str | Path,
+    output_dir=None,
+) -> int:
+    """Run real Agents 1-5, evidence gates, scoring and report generation."""
+
+    project_path = Path(project)
+    policy_path = Path(policy)
+
+    if not project_path.is_dir():
+        print(f"Project folder not found: {project_path}")
+        return 1
+
+    if not policy_path.is_file():
+        print(f"Policy file not found: {policy_path}")
+        return 1
+
+    try:
+        policy_text = policy_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        print(f"Cannot read policy file: {error}")
+        return 1
+
+    if not policy_text.strip():
+        print(f"Policy file is empty: {policy_path}")
+        return 1
+    print("FULL REAL pipeline. This makes API calls (Agents 1-4).")
+    print(f"Project: {project_path}")
+    print(f"Policy:  {policy_path} ({len(policy_text)} characters)")
+    print()
+
+    try:
+        model = _load_model()
+
+        from agents.alignment_agent.agent import AlignmentAgent
+        from agents.implementation_agent.agent import ImplementationExtractionAgent
+        from agents.legal_rag.agent import LegalAnalysisAgent
+        from agents.legal_rag.retriever import LegalRetriever
+        from agents.policy_agent.agent import PolicyExtractionAgent
+
+        retriever = LegalRetriever()
+        legal_agent = LegalAnalysisAgent(retriever=retriever)
+
+    except Exception as error:
+        print(
+            "Cannot initialize the full real pipeline: "
+            f"{type(error).__name__}: {error}"
+        )
+        return 1
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    state = AssessmentState(
+        request=AssessmentRequest(
+            assessment_id=f"full-real-{stamp}",
+            policy_documents=[
+                PolicyDocument(
+                    name=policy_path.name,
+                    text=policy_text,
+                )
+            ],
+            project_path=str(project_path),
+        )
+    )
+
+    run_analysis_stages(
+        state,
+        PolicyExtractionAgent(model),
+        lambda: ImplementationExtractionAgent(model),
+        lambda: AlignmentAgent(model),
+    )
+
+    run_final_assessment_stage(
+        state=state,
+        legal_agent=legal_agent,
+        scoring_engine=ComplianceScoringEngine(),
+        report_agent=ReportGenerationAgent(),
+    )
+    _finish(
+        state,
+        output_dir,
+        "FULL REAL pipeline run finished.",
+        "dpdp_audit_full_real",
+    )
+
+    summary = summarize_assessment(state)
+
+    if not summary.is_complete:
+        print("\nAssessment is incomplete. Check the audit record for details.")
+        return 1
+
+    print("\nAssessment completed successfully.")
     return 0
 
 
@@ -274,35 +384,53 @@ def cli(argv: list[str] | None = None) -> int:
         help="folder for the audit file (default: system temp folder)",
     )
 
-    parser.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+
+    mode_group.add_argument(
         "--real",
         action="store_true",
         help="use the real model for Agents 1-3 (makes API calls)",
     )
 
+    mode_group.add_argument(
+        "--full-real",
+        action="store_true",
+        help="run the complete real pipeline, including legal analysis (makes API calls)",
+    )
+
     parser.add_argument(
         "--project",
         default=str(DEFAULT_PROJECT),
-        help="Django project folder to scan (only with --real)",
+        help="Django project folder to scan (used with --real or --full-real)",
     )
 
     parser.add_argument(
         "--policy",
         default=str(DEFAULT_POLICY),
-        help="policy text file (only with --real)",
+        help="Policy text file (used with --real or --full-real)",
     )
 
     args = parser.parse_args(argv)
 
-    if not args.real:
-        main(args.output_dir)
-        return 0
+    if args.full_real:
+        return run_full_real(
+            args.project,
+            args.policy,
+            args.output_dir,
+        )
 
-    return run_real(
-        args.project,
-        args.policy,
-        args.output_dir,
-    )
+    if args.real:
+        return run_real(
+            args.project,
+            args.policy,
+            args.output_dir,
+        )
+
+    main(args.output_dir)
+    return 0
+
+
+
 
 
 if __name__ == "__main__":
