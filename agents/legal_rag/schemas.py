@@ -81,6 +81,12 @@ class FailedLLMCall(BaseModel):
     attempt: int = Field(ge=1)
     error_type: str
     error_message: str | None = None
+    http_status: str | None = None
+    retry_after: str | None = None
+    retry_after_ms: str | None = None
+    rate_limit_reset_requests: str | None = None
+    rate_limit_reset_tokens: str | None = None
+    request_id: str | None = None
 
 
 class FailedRetrieval(BaseModel):
