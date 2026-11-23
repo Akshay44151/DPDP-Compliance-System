@@ -1,4 +1,6 @@
+import json
 
+from dashboard.pdf_report import make_pdf
 from contextlib import redirect_stdout
 import hmac
 from pathlib import Path, PurePosixPath
@@ -424,46 +426,254 @@ if submitted:
             )
 
 
+
 # --------------------------------------------------
-# Display results after execution
+# Display integrated assessment results and reports
 # --------------------------------------------------
 
 if st.session_state.get("assessment_finished", False):
 
     st.divider()
-
-    st.subheader("Assessment result")
+    st.header("Assessment Results")
 
     if st.session_state["assessment_exit_code"] == 0:
-
         st.success("Assessment completed successfully.")
-
     else:
-
         st.warning(
             "Assessment is incomplete or encountered an error. "
-            "Review the execution log."
+            "Review the execution log and available audit record."
         )
-
-    st.text_area(
-        "Execution log",
-        value=st.session_state.get("assessment_log", ""),
-        height=350,
-    )
 
     audit_bytes = st.session_state.get("audit_bytes")
 
     if audit_bytes:
 
-        st.download_button(
-            "Download audit JSON",
-            data=audit_bytes,
-            file_name="dpdp_audit_record.json",
-            mime="application/json",
-        )
+        try:
+            audit_data = json.loads(audit_bytes.decode("utf-8-sig"))
+
+            if not isinstance(audit_data, dict):
+                raise ValueError("Audit record must be a JSON object.")
+
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+            st.error(f"Could not read the generated audit record: {error}")
+            audit_data = None
+
+        if audit_data is not None:
+
+            summary = audit_data.get("summary")
+            summary = summary if isinstance(summary, dict) else {}
+
+            score = audit_data.get("compliance_score")
+            score = score if isinstance(score, dict) else {}
+
+            compliance = audit_data.get("compliance_report")
+            compliance = compliance if isinstance(compliance, dict) else {}
+
+            gated = audit_data.get("legal_analysis_gated")
+            gated = gated if isinstance(gated, dict) else {}
+
+            findings = gated.get("findings", [])
+            findings = findings if isinstance(findings, list) else []
+
+            # Assessment overview
+            st.subheader("1. Assessment Overview")
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.metric(
+                    "Total findings",
+                    score.get("total_findings", len(findings)),
+                )
+
+            with col2:
+                st.metric(
+                    "Assessed findings",
+                    compliance.get("assessed_findings", "Not available"),
+                )
+
+            with col3:
+                st.metric(
+                    "Assessment coverage",
+                    f"{score.get('assessment_coverage_percent', 'Not available')}%",
+                )
+
+            st.write(
+                "**Assessment ID:**",
+                audit_data.get("assessment_id", "Not available"),
+            )
+
+            if score.get("score") is None:
+                st.warning(
+                    "Compliance score withheld: "
+                    + str(
+                        score.get(
+                            "score_withheld_reason",
+                            "No legally assessable outcome is available.",
+                        )
+                    )
+                )
+            else:
+                st.metric("Compliance Score", score["score"])
+
+            # Final legally gated findings
+            st.divider()
+            st.subheader("2. Final Legal Findings")
+
+            st.caption(
+                "These findings reflect the final evidence-gated legal analysis."
+            )
+
+            if not findings:
+                st.info("No final legal findings are available.")
+            else:
+                table_rows = []
+
+                for index, finding in enumerate(findings, start=1):
+                    if not isinstance(finding, dict):
+                        continue
+
+                    table_rows.append({
+                        "Finding": finding.get(
+                            "alignment_finding_id",
+                            f"Finding {index}",
+                        ),
+                        "Status": finding.get("status", "Not available"),
+                        "Confidence": finding.get("confidence", "Not available"),
+                    })
+
+                if table_rows:
+                    st.dataframe(
+                        table_rows,
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                for index, finding in enumerate(findings, start=1):
+                    if not isinstance(finding, dict):
+                        continue
+
+                    finding_id = finding.get(
+                        "alignment_finding_id",
+                        f"Finding {index}",
+                    )
+                    status = finding.get("status", "Not available")
+
+                    with st.expander(f"{finding_id} — {status}"):
+
+                        for field, label in [
+                            ("legal_reasoning", "Legal reasoning"),
+                            ("applicable_provisions", "Applicable provisions"),
+                            ("evidence_fact_ids", "Evidence references"),
+                            ("citations", "Legal citations"),
+                            ("confidence", "Confidence"),
+                            ("limitations", "Limitations"),
+                        ]:
+                            if field in finding:
+                                st.markdown(f"**{label}**")
+                                st.write(finding[field])
+
+            # Evidence and implementation
+            st.divider()
+            st.subheader("3. Evidence and Implementation")
+
+            for key, label in [
+                ("implementation_report", "Implementation analysis"),
+                ("evidence_gate", "Evidence gate results"),
+                ("legal_gate_application", "Legal gate decisions"),
+            ]:
+                section = audit_data.get(key)
+
+                with st.expander(label):
+                    if isinstance(section, dict) and section:
+                        for field, value in section.items():
+                            st.markdown(
+                                f"**{str(field).replace('_', ' ').title()}**"
+                            )
+                            st.write(value)
+                    elif section:
+                        st.write(section)
+                    else:
+                        st.caption("No information available.")
+
+            # Recommendations
+            st.divider()
+            st.subheader("4. Recommendations")
+
+            recommendations = compliance.get("recommendations", [])
+
+            if not recommendations:
+                recommendations = audit_data.get("recommendations", [])
+
+            if isinstance(recommendations, list) and recommendations:
+                for recommendation in recommendations:
+                    if isinstance(recommendation, dict):
+                        title = (
+                            recommendation.get("finding_id")
+                            or recommendation.get("title")
+                            or "Recommendation"
+                        )
+                        with st.expander(str(title)):
+                            for key, value in recommendation.items():
+                                st.markdown(
+                                    f"**{str(key).replace('_', ' ').title()}**"
+                                )
+                                st.write(value)
+                    else:
+                        st.write(recommendation)
+            else:
+                st.info("No recommendations were recorded.")
+
+            # Downloads
+            st.divider()
+            st.subheader("5. Download Assessment Reports")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.download_button(
+                    "Download Audit JSON",
+                    data=audit_bytes,
+                    file_name="dpdp_audit_record.json",
+                    mime="application/json",
+                    use_container_width=True,
+                    key="download_audit_json",
+                )
+
+            with col2:
+                try:
+                    pdf_bytes = make_pdf(audit_data)
+
+                    st.download_button(
+                        "Download PDF Report",
+                        data=pdf_bytes,
+                        file_name="dpdp_compliance_report.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                        key="download_audit_pdf",
+                    )
+
+                except Exception as error:
+                    st.error(
+                        "PDF generation failed. "
+                        f"Error type: {type(error).__name__}"
+                    )
 
     else:
+        st.info("No audit JSON file was found in the output folder.")
 
-        st.info(
-            "No audit JSON file was found in the output folder."
+    # Execution log
+    st.divider()
+
+    with st.expander("View Assessment Execution Log"):
+        st.text_area(
+            "Execution log",
+            value=st.session_state.get("assessment_log", ""),
+            height=350,
+            disabled=True,
         )
+
+    st.caption(
+        "This is an automated informational assessment, not legal advice "
+        "or a legal certification. Findings should be reviewed by qualified personnel."
+    )
