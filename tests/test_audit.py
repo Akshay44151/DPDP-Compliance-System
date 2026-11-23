@@ -155,6 +155,8 @@ def test_provider_error_audit_excludes_sensitive_message_and_keeps_http_metadata
             headers={
                 "retry-after": "2",
                 "retry-after-ms": "2000",
+                "x-ratelimit-reset-requests": "3s",
+                "x-ratelimit-reset-tokens": "5s",
             }
         )
 
@@ -190,4 +192,6 @@ def test_provider_error_audit_excludes_sensitive_message_and_keeps_http_metadata
     assert failed["http_status"] == "429"
     assert failed["retry_after"] == "2"
     assert failed["retry_after_ms"] == "2000"
+    assert failed["rate_limit_reset_requests"] == "3s"
+    assert failed["rate_limit_reset_tokens"] == "5s"
     assert failed["request_id"] == "req-audit-123"
