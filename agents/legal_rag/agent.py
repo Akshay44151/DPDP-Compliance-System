@@ -95,6 +95,11 @@ def llm_error_diagnostics(exc: Exception) -> dict[str, Any]:
     """Extract safe HTTP and rate-limit metadata from an LLM API error."""
     details = {"error_type": type(exc).__name__}
 
+    # Avoid exposing raw provider/API errors that may contain sensitive data.
+    # Ordinary application exceptions can retain their diagnostic message.
+    if not any(hasattr(exc, attr) for attr in ("status_code", "response", "body")):
+        details["error_message"] = str(exc)[:500]
+
     status_code = getattr(exc, "status_code", None)
     if status_code is not None:
         details["http_status"] = str(status_code)[:20]
