@@ -227,6 +227,7 @@ class LegalAnalysisAgent:
                 retrieval_failures.append({
                     "alignment_finding_id": alignment.id,
                     "error_type": type(exc).__name__,
+                    "error_message": str(exc)[:500],
                 })
                 findings.append(self.insufficient(
                     alignment.id,
@@ -307,6 +308,7 @@ class LegalAnalysisAgent:
                     "alignment_finding_id": alignment.id,
                     "attempt": attempt,
                     "error_type": type(exc).__name__,
+                    "error_message": str(exc)[:500],
                 })
                 if attempt == 1:
                     continue
@@ -367,6 +369,7 @@ class LegalAnalysisAgent:
                     "alignment_finding_id": alignment.id,
                     "attempt": attempt,
                     "error_type": type(exc).__name__,
+                    "error_message": str(exc)[:500],
                 })
                 if attempt == 1:
                     continue

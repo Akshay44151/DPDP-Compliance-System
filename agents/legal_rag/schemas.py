@@ -1,4 +1,4 @@
-﻿from enum import Enum
+from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -80,6 +80,7 @@ class FailedLLMCall(BaseModel):
     alignment_finding_id: str
     attempt: int = Field(ge=1)
     error_type: str
+    error_message: str | None = None
 
 
 class FailedRetrieval(BaseModel):
@@ -89,6 +90,7 @@ class FailedRetrieval(BaseModel):
 
     alignment_finding_id: str
     error_type: str
+    error_message: str | None = None
 
 
 class LegalAnalysisResult(BaseModel):
