@@ -1,4 +1,4 @@
-import builtins
+﻿import builtins
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -54,7 +54,7 @@ def test_pdf_includes_withheld_score_explanation(monkeypatch):
     ]
 
     expected_text = (
-        "Score withheld — "
+        "Score withheld " + chr(0x2014) + " "
         + score["score_withheld_reason"]
     )
 
