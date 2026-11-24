@@ -1,6 +1,7 @@
 """Tests for the audit record. No model, no network."""
 
 import json
+from types import SimpleNamespace
 from datetime import datetime, timezone
 
 import pytest
@@ -13,6 +14,8 @@ from orchestrator.models import (
     StepStatus,
 )
 from orchestrator.summary import AssessmentSummary
+from agents.legal_rag.schemas import FailedLLMCall, LegalAnalysisResult
+from agents.legal_rag.agent import llm_error_diagnostics
 
 MARKER = "SECRET-POLICY-TEXT-123"
 FIXED_TIME = datetime(2026, 11, 17, 10, 0, 0, tzinfo=timezone.utc)
@@ -106,3 +109,89 @@ def test_record_keeps_unknown_verdict_ids():
     record = build_audit_record(state, make_summary(), created_at=FIXED_TIME)
 
     assert record["alignment_result"]["unknown_verdict_ids"] == ["pc_000000000000"]
+
+
+def test_agent4_error_message_survives_serialization_and_audit_json(tmp_path):
+    error_message = "Citation excerpt does not match retrieved source text."
+
+    legal_result = LegalAnalysisResult(
+        findings=[],
+        failed_calls=[
+            FailedLLMCall(
+                alignment_finding_id="A-007",
+                attempt=2,
+                error_type="ValueError",
+                error_message=error_message,
+            )
+        ],
+    )
+
+    # Verify LegalAnalysisResult JSON serialization preserves diagnostics.
+    serialized = legal_result.model_dump(mode="json")
+    restored = LegalAnalysisResult.model_validate(serialized)
+
+    assert restored.failed_calls[0].error_message == error_message
+
+    # Verify the generated audit JSON includes the preserved diagnostic.
+    state = make_state()
+    state.legal_analysis_original = restored.model_dump(mode="json")
+
+    record = build_audit_record(state, make_summary(), created_at=FIXED_TIME)
+    path = write_audit_record(record, tmp_path / "audit")
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+
+    failed_call = loaded["legal_analysis_original"]["failed_calls"][0]
+    assert failed_call["alignment_finding_id"] == "A-007"
+    assert failed_call["error_type"] == "ValueError"
+    assert failed_call["error_message"] == error_message
+
+
+def test_provider_error_audit_excludes_sensitive_message_and_keeps_http_metadata(tmp_path):
+    class FakeAPIError(Exception):
+        status_code = 429
+        body = {"secret": "SENSITIVE_RESPONSE_BODY"}
+        request_id = "req-audit-123"
+        response = SimpleNamespace(
+            headers={
+                "retry-after": "2",
+                "retry-after-ms": "2000",
+                "x-ratelimit-reset-requests": "3s",
+                "x-ratelimit-reset-tokens": "5s",
+            }
+        )
+
+    diagnostics = llm_error_diagnostics(
+        FakeAPIError("SENSITIVE_PROVIDER_ERROR_MESSAGE")
+    )
+
+    failed_call = FailedLLMCall(
+        alignment_finding_id="A-008",
+        attempt=1,
+        **diagnostics,
+    )
+
+    legal_result = LegalAnalysisResult(
+        findings=[],
+        failed_calls=[failed_call],
+    )
+
+    state = make_state()
+    state.legal_analysis_original = legal_result.model_dump(mode="json")
+
+    record = build_audit_record(state, make_summary(), created_at=FIXED_TIME)
+    path = write_audit_record(record, tmp_path / "audit")
+    audit_json = path.read_text(encoding="utf-8")
+    loaded = json.loads(audit_json)
+
+    failed = loaded["legal_analysis_original"]["failed_calls"][0]
+
+    assert "SENSITIVE_PROVIDER_ERROR_MESSAGE" not in audit_json
+    assert "SENSITIVE_RESPONSE_BODY" not in audit_json
+    assert failed["error_type"] == "FakeAPIError"
+    assert failed["error_message"] is None
+    assert failed["http_status"] == "429"
+    assert failed["retry_after"] == "2"
+    assert failed["retry_after_ms"] == "2000"
+    assert failed["rate_limit_reset_requests"] == "3s"
+    assert failed["rate_limit_reset_tokens"] == "5s"
+    assert failed["request_id"] == "req-audit-123"
