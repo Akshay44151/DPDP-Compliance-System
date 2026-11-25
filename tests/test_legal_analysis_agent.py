@@ -283,6 +283,8 @@ def test_two_validation_failures_return_insufficient_evidence():
     assert result.findings[0].status == LegalAssessmentStatus.INSUFFICIENT_EVIDENCE
     assert [call.attempt for call in result.failed_calls] == [1, 2]
     assert all(call.error_type == "ValueError" for call in result.failed_calls)
+    assert all(call.error_message for call in result.failed_calls)
+    assert all(len(call.error_message) <= 500 for call in result.failed_calls)
 
 
 def test_api_failure_is_recorded_without_retry():
@@ -301,6 +303,7 @@ def test_api_failure_is_recorded_without_retry():
     assert result.failed_calls[0].alignment_finding_id == "A1"
     assert result.failed_calls[0].attempt == 1
     assert result.failed_calls[0].error_type == "RuntimeError"
+    assert result.failed_calls[0].error_message == "Network connection failed"
 
 
 def test_api_failure_stops_llm_calls_for_remaining_findings():
@@ -343,6 +346,7 @@ def test_retrieval_failure_is_recorded():
     assert len(result.retrieval_failures) == 1
     assert result.retrieval_failures[0].alignment_finding_id == "A1"
     assert result.retrieval_failures[0].error_type == "ConnectionError"
+    assert result.retrieval_failures[0].error_message == "Legal database unavailable"
 
 
 def test_legal_conclusion_without_linked_fact_is_rejected():

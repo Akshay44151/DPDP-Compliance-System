@@ -193,6 +193,96 @@ def make_pdf(data):
         styles["small"],
     ))
 
+    # Connect final legal findings to their original alignment records.
+    alignment_result = data.get("alignment_result")
+    alignment_result = alignment_result if isinstance(alignment_result, dict) else {}
+    alignment_records = alignment_result.get("findings", [])
+    alignment_by_id = {
+        str(item.get("id")): item
+        for item in alignment_records
+        if isinstance(item, dict) and item.get("id") is not None
+    }
+
+    # Summarise only final, evidence-gated outcomes.
+    if findings:
+        status_counts = {}
+        category_counts = {}
+
+        for item in findings:
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status", "not_available"))
+            status_counts[status] = status_counts.get(status, 0) + 1
+
+            finding_id = str(item.get("alignment_finding_id", ""))
+            alignment = alignment_by_id.get(finding_id, {})
+            category = alignment.get("category", "Category unavailable")
+            if isinstance(category, dict):
+                category = category.get("value", "Category unavailable")
+            category = str(category)
+            category_counts.setdefault(category, {})
+            category_counts[category][status] = (
+                category_counts[category].get(status, 0) + 1
+            )
+
+        subsection("Assessment attention indicators")
+        field(
+            "Potential non-compliance findings",
+            status_counts.get("potential_non_compliance", 0),
+        )
+        field(
+            "Findings requiring review",
+            status_counts.get("requires_review", 0),
+        )
+        field(
+            "Findings with insufficient evidence",
+            status_counts.get("insufficient_evidence", 0),
+        )
+        field(
+            "Potential compliance findings",
+            status_counts.get("potential_compliance", 0),
+        )
+        field(
+            "Not-applicable findings",
+            status_counts.get("not_applicable", 0),
+        )
+
+        attention = (
+            status_counts.get("potential_non_compliance", 0)
+            + status_counts.get("requires_review", 0)
+        )
+        story.append(Paragraph(
+            "<b>Review priority:</b> "
+            + (
+                "Further attention is indicated by final findings marked "
+                "potential non-compliance or requiring review."
+                if attention
+                else "No final findings currently carry either of these "
+                     "two attention statuses. This is not a legal risk rating."
+            ),
+            styles["body"],
+        ))
+
+        subsection("Category-wise final finding breakdown")
+        category_rows = [["Category", "Final status", "Count"]]
+        for category in sorted(category_counts):
+            for status, count in sorted(category_counts[category].items()):
+                category_rows.append([category, status, count])
+
+        category_table = Table(
+            category_rows,
+            repeatRows=1,
+            colWidths=[58 * mm, 82 * mm, 25 * mm],
+        )
+        category_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#DCE6F1")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#17365D")),
+            ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#B7C9D6")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("PADDING", (0, 0), (-1, -1), 5),
+        ]))
+        story.append(category_table)
+
     if findings:
         rows = [["Finding ID", "Final status"]]
         for index, finding in enumerate(findings, start=1):
@@ -224,6 +314,28 @@ def make_pdf(data):
             subsection(
                 f"{finding_id} - {finding.get('status', 'Not available')}"
             )
+
+            alignment = alignment_by_id.get(str(finding_id), {})
+            if alignment:
+                field("Policy category", alignment.get("category"))
+                if alignment.get("claim") is not None:
+                    field("Related policy claim", alignment.get("claim"))
+                if alignment.get("reasoning"):
+                    field("Implementation alignment reasoning", alignment["reasoning"])
+
+                locations = alignment.get("code_locations", [])
+                if locations:
+                    location_labels = []
+                    for location in locations:
+                        if isinstance(location, dict):
+                            filename = location.get("file", "File unavailable")
+                            line = location.get("line")
+                            location_labels.append(
+                                f"{filename}" + (f" (line {line})" if line is not None else "")
+                            )
+                        else:
+                            location_labels.append(str(location))
+                    field("Source-code locations", location_labels)
 
             for key, label in [
                 ("legal_reasoning", "Legal reasoning"),

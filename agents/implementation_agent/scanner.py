@@ -7,7 +7,9 @@ from pathlib import Path
 
 from agents.implementation_agent.schemas import CodeLocation, EvidenceItem
 
-SKIP_DIRS = {"venv", ".venv", "env", "node_modules", "migrations", "__pycache__", ".git", "static"}
+SKIP_DIRS = {"venv", ".venv", "env", "node_modules", "migrations", "__pycache__", ".git"}
+FRONTEND_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte"}
+MAX_FRONTEND_BYTES = 1_000_000
 
 PERSONAL = {
     "email", "phone", "mobile", "aadhaar", "aadhar", "pan", "dob", "birth", "birthdate",
@@ -78,7 +80,9 @@ class _Visitor(ast.NodeVisitor):
                     self.emit("retention_field", st, **d)
                 elif tk & PURPOSE:
                     self.emit("purpose_marker", st, **d)
-                elif tk & PERSONAL or ftype == "EmailField":
+                else:
+                    # Record explicit model fields as schema evidence.
+                    # Their presence alone does not prove compliance.
                     self.emit("model_field", st, **d)
 
     def _form(self, cls: ast.ClassDef):
@@ -148,6 +152,33 @@ class _Visitor(ast.NodeVisitor):
     # ---- calls: third-party sharing, personal data in logs ----
     def visit_Call(self, node: ast.Call):
         name = dotted(node.func)
+
+        # Django request.POST.get("field") / request.GET.get("field")
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "get":
+            owner = node.func.value
+            if isinstance(owner, ast.Attribute) and owner.attr in {"POST", "GET"}:
+                field_node = node.args[0] if node.args else next(
+                    (k.value for k in node.keywords if k.arg == "key"), None
+                )
+                if isinstance(field_node, ast.Constant) and isinstance(field_node.value, str):
+                    self.emit(
+                        "request_input", node,
+                        method=owner.attr,
+                        field=field_node.value,
+                        source=dotted(owner),
+                    )
+
+        # Django JsonResponse({...}): record the response's explicit field names.
+        if name.split(".")[-1] == "JsonResponse" and node.args:
+            payload = node.args[0]
+            if isinstance(payload, ast.Dict):
+                response_fields = [
+                    key.value for key in payload.keys
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str)
+                ]
+                if response_fields:
+                    self.emit("view_response", node, fields=response_fields)
+
         if name in SHARING_CALLS:
             url = node.args[0] if node.args else next(
                 (k.value for k in node.keywords if k.arg == "url"), None)
@@ -187,6 +218,38 @@ def _scan_template(rel: str, text: str, add):
             add("purpose_text", rel, i, line.strip()[:300], {})
 
 
+
+def _scan_frontend(rel: str, source: str, add):
+    """Extract explicit privacy UI disclosures from bounded frontend source files."""
+    for i, line in enumerate(source.splitlines(), 1):
+        low = line.lower()
+        snippet = line.strip()[:300]
+        if not snippet:
+            continue
+
+        if re.search(r"<input\b[^>]*\btype\s*=\s*['\"]checkbox", low):
+            kind = "consent_ui" if tokens(low) & CONSENT else "form_input"
+            add(kind, rel, i, snippet, {"control": "checkbox"})
+
+        if re.search(r"(?:href|to)\s*[:=]\s*['\"][^'\"]*privacy", low) or (
+            "privacy" in low and re.search(r"\b(?:link|href|router|navigate)\b", low)
+        ):
+            add("privacy_notice_link", rel, i, snippet, {})
+
+        if re.search(r"(?:unsubscribe|opt.?out|withdraw.?consent)", low):
+            add("consent_ui", rel, i, snippet, {"control": "withdraw_link_or_action"})
+
+        if any(phrase in low for phrase in (
+            "we collect", "we use your", "purpose of", "for the purpose",
+            "data is used to", "personal information to"
+        )):
+            add("purpose_text", rel, i, snippet, {})
+
+        match = re.search(r"<input\b[^>]*\bname\s*=\s*['\"]([\w-]+)", low)
+        if match:
+            add("form_input", rel, i, snippet, {"name": match.group(1)})
+
+
 def scan_project(root: str | Path):
     """Return (evidence, files_scanned, coverage)."""
     root = Path(root)
@@ -199,7 +262,12 @@ def scan_project(root: str | Path):
 
     files = 0
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or any(p in SKIP_DIRS for p in path.relative_to(root).parts):
+        if not path.is_file():
+            continue
+        relative_parts = path.relative_to(root).parts
+        if any(part in SKIP_DIRS for part in relative_parts):
+            continue
+        if "static" in relative_parts and path.suffix.lower() not in FRONTEND_SUFFIXES:
             continue
         rel = path.relative_to(root).as_posix()
         if path.suffix == ".py":
@@ -217,6 +285,12 @@ def scan_project(root: str | Path):
         elif path.suffix in (".html", ".htm"):
             files += 1
             _scan_template(rel, path.read_text(encoding="utf-8", errors="ignore"), add)
+        elif path.suffix.lower() in FRONTEND_SUFFIXES:
+            if path.stat().st_size > MAX_FRONTEND_BYTES:
+                continue
+            files += 1
+            source = path.read_text(encoding="utf-8", errors="ignore")
+            _scan_frontend(rel, source, add)
 
     coverage: dict[str, int] = {}
     for e in evidence:

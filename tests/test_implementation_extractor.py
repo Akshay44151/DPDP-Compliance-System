@@ -109,3 +109,70 @@ def test_evidence_with_braces_does_not_break_the_prompt_template():
 
     ImplementationExtractionAgent(FakeChatModel(script)).run(APPS / "acmenotes_violating")
     assert any("{" in t for t in seen)       # code snippets contain braces and still render
+
+def test_scanner_detects_privacy_controls_in_static_javascript(tmp_path):
+    js = tmp_path / "static" / "js" / "privacy.js"
+    js.parent.mkdir(parents=True)
+    js.write_text("""
+const marketing = '<input type="checkbox" name="marketing_consent">';
+const privacyLink = '<a href="/privacy">Privacy policy</a>';
+const notice = "We collect your email to provide the service.";
+const withdraw = "withdraw_consent";
+""", encoding="utf-8")
+
+    ev, files, cov = scan_project(tmp_path)
+
+    assert files == 1
+    assert cov["consent_ui"] >= 1
+    assert cov["privacy_notice_link"] >= 1
+    assert cov["purpose_text"] >= 1
+    assert cov["form_input"] >= 1
+
+def test_scanner_detects_django_model_and_view_data(tmp_path):
+    accounts = tmp_path / "accounts"
+    accounts.mkdir()
+
+    (accounts / "models.py").write_text("""
+from django.db import models
+
+class SupportRequest(models.Model):
+    email = models.EmailField()
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+""", encoding="utf-8")
+
+    (accounts / "views.py").write_text("""
+from django.http import JsonResponse
+
+def profile(request):
+    return JsonResponse({
+        "user_id": 101,
+        "email": "demo@example.test",
+        "marketing_opt_in": False,
+    })
+
+def support(request):
+    message = request.POST.get("message", "")
+    return JsonResponse({"received": bool(message)})
+""", encoding="utf-8")
+
+    evidence, files, coverage = scan_project(tmp_path)
+
+    assert files == 2
+    assert coverage["model_field"] == 3
+    assert coverage["view_response"] == 2
+    assert coverage["request_input"] == 1
+
+    fields = {
+        item.detail["field"]
+        for item in evidence
+        if item.kind == "model_field"
+    }
+    assert fields == {"email", "message", "created_at"}
+
+    request_fields = [
+        item.detail["field"]
+        for item in evidence
+        if item.kind == "request_input"
+    ]
+    assert "message" in request_fields
