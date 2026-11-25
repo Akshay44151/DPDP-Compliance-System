@@ -24,12 +24,12 @@ from llm.langchain_model import get_langchain_model
 
 # Which evidence kinds are relevant to which policy category.
 CATEGORY_KINDS: dict[C, list[str]] = {
-    C.TRANSPARENCY_NOTICE: ["privacy_notice_link", "purpose_text", "consent_ui",
-                            "data_sharing", "form_input", "model_field"],
+    C.TRANSPARENCY_NOTICE: ["privacy_notice_link", "purpose_text"],
     C.CONSENT: ["consent_logic", "consent_ui", "data_write", "outbound_email"],
     C.PURPOSE_LIMITATION: ["purpose_marker", "purpose_text", "data_write", "data_sharing",
                            "outbound_email", "personal_data_logged"],
-    C.DATA_MINIMIZATION: ["model_field", "form_field", "form_input"],
+    C.DATA_MINIMIZATION: ["model_field", "form_field", "form_input",
+                           "request_input", "view_response"],
     C.STORAGE_RETENTION: ["retention_logic", "retention_field", "setting",
                           "personal_data_logged"],
 }
@@ -45,10 +45,11 @@ category. Describe what the code actually does. Rules:
 - Be concise: group related items into ONE fact (for example list all personal-data model fields \
 in a single statement, and all form inputs in another). One fact per distinct behaviour.
 - Never emit two facts that say the same thing, and emit at most 8 facts.
-- Emit an "absent" fact only for a control this category would normally need (one fact per missing \
-control), not one per evidence kind with a zero count.
 - Describe only observed behaviour. Do not speculate about intent or possible problems \
 (no "suggests", "likely", "potential").
+- Model-field, request-input and view-response evidence describes observed data structures and \
+data flows only. It does not prove that a privacy notice, consent mechanism, purpose limitation \
+or retention control exists.
 - An evidence item with an empty code snippet only shows that a file or name exists. Never infer \
 what a file contains, or that it is empty, from a missing snippet.
 - Be specific: in a fact about data sent to an external service, name the target URL or host from \

@@ -30,10 +30,6 @@ CATEGORY_KINDS: dict[str, list[str]] = {
     "transparency_notice": [
         "privacy_notice_link",
         "purpose_text",
-        "consent_ui",
-        "data_sharing",
-        "form_input",
-        "model_field",
     ],
     "consent": ["consent_logic", "consent_ui", "data_write", "outbound_email"],
     "purpose_limitation": [
@@ -44,7 +40,13 @@ CATEGORY_KINDS: dict[str, list[str]] = {
         "outbound_email",
         "personal_data_logged",
     ],
-    "data_minimization": ["model_field", "form_field", "form_input"],
+    "data_minimization": [
+        "model_field",
+        "form_field",
+        "form_input",
+        "request_input",
+        "view_response",
+    ],
     "storage_retention": [
         "retention_logic",
         "retention_field",

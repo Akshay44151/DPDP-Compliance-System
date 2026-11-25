@@ -80,7 +80,9 @@ class _Visitor(ast.NodeVisitor):
                     self.emit("retention_field", st, **d)
                 elif tk & PURPOSE:
                     self.emit("purpose_marker", st, **d)
-                elif tk & PERSONAL or ftype == "EmailField":
+                else:
+                    # Record explicit model fields as schema evidence.
+                    # Their presence alone does not prove compliance.
                     self.emit("model_field", st, **d)
 
     def _form(self, cls: ast.ClassDef):
@@ -150,6 +152,33 @@ class _Visitor(ast.NodeVisitor):
     # ---- calls: third-party sharing, personal data in logs ----
     def visit_Call(self, node: ast.Call):
         name = dotted(node.func)
+
+        # Django request.POST.get("field") / request.GET.get("field")
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "get":
+            owner = node.func.value
+            if isinstance(owner, ast.Attribute) and owner.attr in {"POST", "GET"}:
+                field_node = node.args[0] if node.args else next(
+                    (k.value for k in node.keywords if k.arg == "key"), None
+                )
+                if isinstance(field_node, ast.Constant) and isinstance(field_node.value, str):
+                    self.emit(
+                        "request_input", node,
+                        method=owner.attr,
+                        field=field_node.value,
+                        source=dotted(owner),
+                    )
+
+        # Django JsonResponse({...}): record the response's explicit field names.
+        if name.split(".")[-1] == "JsonResponse" and node.args:
+            payload = node.args[0]
+            if isinstance(payload, ast.Dict):
+                response_fields = [
+                    key.value for key in payload.keys
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str)
+                ]
+                if response_fields:
+                    self.emit("view_response", node, fields=response_fields)
+
         if name in SHARING_CALLS:
             url = node.args[0] if node.args else next(
                 (k.value for k in node.keywords if k.arg == "url"), None)
