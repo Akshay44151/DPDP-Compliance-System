@@ -109,3 +109,21 @@ def test_evidence_with_braces_does_not_break_the_prompt_template():
 
     ImplementationExtractionAgent(FakeChatModel(script)).run(APPS / "acmenotes_violating")
     assert any("{" in t for t in seen)       # code snippets contain braces and still render
+
+def test_scanner_detects_privacy_controls_in_static_javascript(tmp_path):
+    js = tmp_path / "static" / "js" / "privacy.js"
+    js.parent.mkdir(parents=True)
+    js.write_text("""
+const marketing = '<input type="checkbox" name="marketing_consent">';
+const privacyLink = '<a href="/privacy">Privacy policy</a>';
+const notice = "We collect your email to provide the service.";
+const withdraw = "withdraw_consent";
+""", encoding="utf-8")
+
+    ev, files, cov = scan_project(tmp_path)
+
+    assert files == 1
+    assert cov["consent_ui"] >= 1
+    assert cov["privacy_notice_link"] >= 1
+    assert cov["purpose_text"] >= 1
+    assert cov["form_input"] >= 1
