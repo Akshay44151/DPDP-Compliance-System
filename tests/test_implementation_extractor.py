@@ -127,3 +127,52 @@ const withdraw = "withdraw_consent";
     assert cov["privacy_notice_link"] >= 1
     assert cov["purpose_text"] >= 1
     assert cov["form_input"] >= 1
+
+def test_scanner_detects_django_model_and_view_data(tmp_path):
+    accounts = tmp_path / "accounts"
+    accounts.mkdir()
+
+    (accounts / "models.py").write_text("""
+from django.db import models
+
+class SupportRequest(models.Model):
+    email = models.EmailField()
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+""", encoding="utf-8")
+
+    (accounts / "views.py").write_text("""
+from django.http import JsonResponse
+
+def profile(request):
+    return JsonResponse({
+        "user_id": 101,
+        "email": "demo@example.test",
+        "marketing_opt_in": False,
+    })
+
+def support(request):
+    message = request.POST.get("message", "")
+    return JsonResponse({"received": bool(message)})
+""", encoding="utf-8")
+
+    evidence, files, coverage = scan_project(tmp_path)
+
+    assert files == 2
+    assert coverage["model_field"] == 3
+    assert coverage["view_response"] == 2
+    assert coverage["request_input"] == 1
+
+    fields = {
+        item.detail["field"]
+        for item in evidence
+        if item.kind == "model_field"
+    }
+    assert fields == {"email", "message", "created_at"}
+
+    request_fields = [
+        item.detail["field"]
+        for item in evidence
+        if item.kind == "request_input"
+    ]
+    assert "message" in request_fields
